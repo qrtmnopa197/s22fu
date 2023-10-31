@@ -1,0 +1,6 @@
+﻿var,x_min,x_max,y_min,y_max
+decrate_rt,-0.1,6.1,-0.1,20
+feedrate_rt,-0.1,6.1,-0.1,20
+choice_rt,-0.1,3.6,-0.1,40
+dec_rate,-0.1,1.1,-0.1,30
+feed_rate,-0.1,1.1,-0.1,30

@@ -1,0 +1,232 @@
+---
+title: "power_analyses"
+author: "Daniel P"
+date: '2023-06-07'
+output: html_document
+---
+
+```{r 1, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(mc.cores=6)
+
+##SET MANUALLY
+path_to_project_directory <- "~/projects/s22_follow_up/"
+path_to_s22<- "~/projects/spring_2022_study/"
+##############
+stan_model_dir <- paste0(path_to_project_directory,"code/stan_models/power_analysis_models/")
+model_out_dir <- paste0(path_to_project_directory,"output/results/stan_model_fits/power_analysis_models/")
+
+library(GGally)
+library(cmdstanr)
+library(tidyverse)
+library(tidybayes)
+library(loo)
+library(bayesplot)
+library(sigmoid)
+library(lme4)
+
+source(paste0(path_to_s22,"code/functions/fit_stan_model.R"))
+source(paste0(path_to_s22,"code/functions/stan_utilities.R"))
+source(paste0(path_to_s22,"code/functions/s22_utilities.R"))
+
+trials <- read.csv(paste0(path_to_s22,"analysis_data/trial_level_data_all_subs_2022-05-22_19_14_57.csv"))
+subs <- read.csv(paste0(path_to_s22,"analysis_data/sub_level_data_all_subs_2022-05-22_19_14_57.csv"))
+```
+
+# Pre-processing
+Eliminate subject who fail to meet quality standards
+```{r 2}
+#identify subjects who fail the hard QC cutoffs
+sub_hard_fail <- subs %>% filter(att_checks_passed == 0 |
+                            percent_left > .8 |
+                            percent_left < .2 |
+                            consecutive_late_choices > 5 |
+                            late_percent > .2 |
+                            answers_incorrect > 2 |
+                            trials_completed < 126 |
+                            probe_skipped_percent > .14 |
+                            id %in% c(86956,86746,86839,80227,79198,86503,86869,85588))
+
+#count the number of soft QC cutoffs each subject meets
+subs$softs <- 0
+for(i in 1:nrow(subs)){
+  subs$softs[i] <- length(which(c(subs$consecutive_auto_process[i] > 4,subs$att_checks_passed[i] == 1,subs$answers_incorrect[i] > 1,
+                                  subs$late_percent[i] > .1,subs$probe_skipped_percent[i] > .07,subs$noprobe_pt_choices[i] == 0,subs$probe_pt_choices[i] == 0)))
+}
+
+sub_soft_fail <- filter(subs,softs >= 2) #identify those who meet more than 2 soft cutoffs
+
+subs_to_exclude <- unique(c(sub_hard_fail$id,sub_soft_fail$id)) #mark subjects who fail on either hard or soft or criteria for exclusion
+
+trials <- trials %>% filter(!(id %in% subs_to_exclude)) %>% filter(choice != "late") #filter out bad subjects, as well as trials on which the subject failed to make a choice
+#trials <- trials %>% filter(!(id %in% c(86077,86134,86356,87163,86458,85588,86869,86956,86746,79198,86359,86503,86881))) %>% filter(choice != "late")
+```
+
+Do a few data transormations.
+```{r 3}
+trials <- add_sub_indices(trials) #add subject indices to the df. These will match the indices used in Stan.
+
+#convert affect ratings to subject-by-subject z-scores, to control for intersubject differences in rating variability
+trials[c("valence_dec","valence_feed")] <- trials[c("valence_dec","valence_feed")]*-1 #flip the affect ratings, so that the low numbers 
+                                                                                      #correspond to low values of valence
+trials <- do.call(rbind,by(trials,trials$id,col_zscore,c("valence_dec","valence_feed"))) #translate valence ratings to z-scores
+
+#add a column with the affect probe number for each subject (999 if no probe response). These will be passed into Stan
+trials <- add_probe_number(trials,newcol="dec_probe_number",val_col="valence_dec",arous_col="arousal_dec") #for decision probes
+trials <- add_probe_number(trials,newcol="feed_probe_number",val_col="valence_feed",arous_col="arousal_feed") #for feedback probes
+
+#add a column with completed trial numbers - the trial indices if you ignore late trials. These will match the "t" trial numbers used in the Stan models
+trials <- do.call(rbind,by(trials,trials$sub_index,add_trials_nl))
+trials$overall_trial_nl <- 1:nrow(trials) #get the overall trial number ignoring late trials and collapsing across subjects
+
+
+trials <- trials %>% mutate(dec_probe_completed = if_else(is.na(arousal_dec) | is.na(valence_dec),0,1)) #add a 1/0 column indicating whether a
+                                                                                                        #decision probe was completed on each trial
+trials <- trials %>% mutate(feed_probe_completed = if_else(is.na(arousal_feed) | is.na(valence_feed),0,1)) #diddo feedback
+
+#get mean-centeedr trial and block predictors for easier fitting in Stan
+trials$trial_nl_cent <- trials$trial_nl - mean(trials$trial_nl)                                                          
+trials$block_cent <- trials$block - mean(trials$block) 
+
+#get the chosen fractal index
+trials <- trials %>% mutate(chosen_frac = ifelse(choice == "fractal_a_dec",fractal_a_num,fractal_b_num))
+trials <- trials %>% mutate(unchosen_frac = ifelse(choice == "fractal_a_dec",fractal_b_num,fractal_a_num))
+
+#add columns showing the pairs at play in each block
+new_trials_list <- by(trials,trials$id,create_pair_cols_sub)
+trials <- do.call(rbind,new_trials_list)
+```
+
+# Model comparison power analyses
+
+Comparing approximate R-squared for the combined model and PE model (the best-fitting theory-specific model)
+```{r}
+#PE model
+exdecay_trial_pe_learnV_noshrink_fit <- load_cmdstan_fit("exdecay_trial_pe_learnV_noshrink")
+rsq_etpln <- mcmc_rsq(exdecay_trial_pe_learnV_noshrink_fit,preds=c("dec_pred","feed_pred"),resid=c("d_resid","f_resid"),print_plot=FALSE)
+#Full model
+exdecay_trial_full_learnV_noshrink_fit <- load_cmdstan_fit("exdecay_trial_full_learnV_noshrink")
+rsq_etfln <- mcmc_rsq(exdecay_trial_full_learnV_noshrink_fit,preds=c("dec_pred","feed_pred"),resid=c("d_resid","f_resid"),print_plot=FALSE)
+
+(rsq_etfln$sum$mean[1] - rsq_etpln$sum$mean[1])*(2/3) #for a conservative power estimate, multiplying by 2/3
+```
+
+Now getting number of effective parameters (p_loo)
+```{r}
+exdecay_trial_full_learnV_noshrink <- read_fsml("exdecay_trial_full_learnV_noshrink")
+exdecay_trial_pe_learnV_noshrink <- read_fsml("exdecay_trial_pe_learnV_noshrink")
+exdecay_trial_full_learnV_noshrink$loo
+exdecay_trial_pe_learnV_noshrink$loo
+```
+58 parameters more; 87 when increasing that by 50% (for conservative power estimate).952 parameters for full model when multiplying by 50%.
+
+Calculating residual variance for the full model
+```{r}
+1-rsq_etfln$sum$mean[1]
+```
+
+Repeating this process for the null model and the worst-fitting theory-specific model: the regret model.
+```{r}
+null_affect_fit <- load_cmdstan_fit("null_affect")
+exdecay_trial_regret_noshrink_fit <- load_cmdstan_fit("exdecay_trial_regret_noshrink")
+
+rsq_regret <- mcmc_rsq(exdecay_trial_regret_noshrink_fit,preds=c("dec_pred","feed_pred"),resid=c("d_resid","f_resid"),print_plot=FALSE)
+rsq_null <- mcmc_rsq(null_affect_fit,preds=c("dec_pred","feed_pred"),resid=c("d_resid","f_resid"),print_plot=FALSE)
+
+(rsq_regret$sum$mean[1] - rsq_null$sum$mean[1])*(2/3) #for a conservative power estimate, multiplying by 2/3
+```
+Getting number of effective parameters
+```{r}
+exdecay_trial_regret_noshrink <- read_fsml("exdecay_trial_regret_noshrink")
+null_affect <- read_fsml("null_affect")
+exdecay_trial_regret_noshrink$loo
+null_affect$loo
+```
+152 parameters more; 228 when increasing that by 50% (for conservative power estimate).
+
+Calculating residual variance for the regret model
+```{r}
+1-rsq_regret$sum$mean[1]
+```
+
+
+
+# Single effect power analyses 
+
+For each effect that came through in study 1, refit the model without that effect.
+
+```{r}
+exdecay_trial_full_learnV_noq <- fit_stan_model(stan_file = paste0(stan_model_dir,"exdecay_trial_full_learnV_noq.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         skip=c("waic","check_csvs"),
+                         n_t=126,
+                         chains = 2,
+                         pes = FALSE,
+                         arl = FALSE)
+```
+
+```{r}
+exdecay_trial_full_learnV_nopwrd <- fit_stan_model(stan_file = paste0(stan_model_dir,"exdecay_trial_full_learnV_nopwrd.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         skip=c("waic","check_csvs"),
+                         n_t=126,
+                         chains = 2,
+                         pes = FALSE,
+                         arl = FALSE)
+```
+
+```{r}
+exdecay_trial_full_learnV_nope <- fit_stan_model(stan_file = paste0(stan_model_dir,"exdecay_trial_full_learnV_nope.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         skip=c("waic","check_csvs"),
+                         n_t=126,
+                         chains = 2,
+                         pes = FALSE,
+                         arl = FALSE)
+```
+
+```{r}
+exdecay_trial_full_learnV_noreg <- fit_stan_model(stan_file = paste0(stan_model_dir,"exdecay_trial_full_learnV_noreg.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         skip=c("waic","check_csvs"),
+                         n_t=126,
+                         chains = 2,
+                         pes = FALSE,
+                         arl = FALSE)
+```
+
+Examining r-squareds
+```{r}
+rsq_noreg <- mcmc_rsq(exdecay_trial_full_learnV_noreg$fit,preds=c("dec_pred","feed_pred"),resid=c("d_resid","f_resid"),print_plot=FALSE)
+rsq_nope <- mcmc_rsq(exdecay_trial_full_learnV_nope$fit,preds=c("dec_pred","feed_pred"),resid=c("d_resid","f_resid"),print_plot=FALSE)
+rsq_nopwrd <- mcmc_rsq(exdecay_trial_full_learnV_nopwrd$fit,preds=c("dec_pred","feed_pred"),resid=c("d_resid","f_resid"),print_plot=FALSE)
+rsq_noq <- mcmc_rsq(exdecay_trial_full_learnV_noq$fit,preds=c("dec_pred","feed_pred"),resid=c("d_resid","f_resid"),print_plot=FALSE)
+paste0("No regret:",rsq_noreg$sum$mean[1])
+paste0("No RPE:",rsq_nope$sum$mean[1])
+paste0("No PWRD:",rsq_nopwrd$sum$mean[1])
+paste0("No Q_chosendec:",rsq_noq$sum$mean[1])
+```
+
+The highest R squared is for the model without RPEs, so let's compare that to the full model.
+```{r}
+exdecay_trial_full_learnV_centshrink <- read_fsml("exdecay_trial_full_learnV_centshrink")
+exdecay_trial_full_learnV_centshrink$fit <- load_cmdstan_fit("exdecay_trial_full_learnV_centshrink")
+rsq_full <- mcmc_rsq(exdecay_trial_full_learnV_centshrink$fit,preds=c("dec_pred","feed_pred"),resid=c("d_resid","f_resid"),print_plot=FALSE)
+(rsq_full$sum$mean[1] - rsq_nope$sum$mean[1])*(2/3)
+```
+
+Now getting effective parameter size
+```{r}
+exdecay_trial_full_learnV_centshrink$loo
+exdecay_trial_full_learnV_nope$loo
+```
+2.7 difference in effective number of parameters; 4 when multiplying by 50%. 633 total parameters for full model; 950 when multiplying by 50%.
+
+And residual difference for full model
+```{r}
+1-rsq_full$sum$mean[1]
+```

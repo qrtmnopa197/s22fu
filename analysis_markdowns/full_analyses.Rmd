@@ -1,0 +1,918 @@
+---
+title: "Full analysis"
+author: "Daniel Parr"
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "/Users/dp/projects/s22_follow_up/data_review_analysis_records") })
+output: html_document
+---
+# Overview
+This markdown contains the full set of analyses done on the s22 follow-up study.
+
+# Setting up
+Loading in functions and data; setting paths and options.
+```{r 1, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(mc.cores=6)
+
+##SET MANUALLY
+path_to_project_directory <- "~/projects/s22_follow_up/"
+path_to_s22 <- "~/projects/spring_2022_study/"
+##############
+stan_model_dir_s22fu <- paste0(path_to_project_directory,"code/stan_models/")
+stan_model_dir_s22 <- paste0(path_to_s22,"code/stan_models/final_models/")
+model_out_dir <- paste0(path_to_project_directory,"output/results/stan_model_fits/")
+
+library(cmdstanr)
+library(tidyverse)
+library(tidybayes)
+library(loo)
+library(GGally)
+library(bayesplot)
+library(sigmoid)
+library(abind)
+
+source(paste0(path_to_project_directory,"code/functions/s22fu_utilities.R"))
+source(paste0(path_to_s22,"code/functions/s22_utilities.R"))
+source(paste0(path_to_s22,"code/functions/stan_utilities.R"))
+source(paste0(path_to_s22,"code/functions/fit_stan_model.R"))
+
+trials <- read.csv(paste0(path_to_project_directory,"analysis_data/trial_level_data_all_subs_2023-06-12_09_56_03.csv"))
+subs <- read.csv(paste0(path_to_project_directory,"analysis_data/sub_level_data_all_subs_2023-06-12_09_56_03.csv"))
+```
+
+# Pre-processing
+Eliminate subject who fail to meet quality standards
+
+```{r 2}
+#identify subjects who fail the hard QC cutoffs
+sub_hard_fail <- subs %>% filter(att_checks_passed < 3 |
+                            percent_left > .8 |
+                            percent_left < .2 |
+                            consecutive_late_choices > 5 |
+                            late_percent > .2 |
+                            answers_incorrect > 2 |
+                            trials_completed < 104 |
+                            valrate_skipped_percent > .14 |
+                            valence_sd < .1 |
+                            decrate_sd < .05 |
+                            feedrate_sd < .05)
+
+#count the number of soft QC cutoffs each subject meets
+subs$softs <- 0
+for(i in 1:nrow(subs)){
+  subs$softs[i] <- length(which(c(subs$consecutive_auto_process[i] > 4,subs$att_checks_passed[i] < 4,subs$answers_incorrect[i] > 1,
+                                  subs$late_percent[i] > .1,subs$valrate_skipped_percent[i] > .07,
+                                  subs$choice_pt_completed[i] == 0, subs$decrate_pt_completed[i] == 0, subs$feedrate_pt_completed == 0)))
+}
+sub_soft_fail <- filter(subs,softs >= 2) #identify those who meet more than 2 soft cutoffs
+
+subs_to_exclude <- unique(c(sub_hard_fail$id,sub_soft_fail$id)) #mark subjects who fail on either hard or soft or criteria for exclusion
+
+trials <- trials %>% filter(!(id %in% subs_to_exclude)) %>% filter(choice != "late") #filter out bad subjects, as well as trials on which the subject failed to make a choice
+subs <- subs %>% filter(!(id %in% subs_to_exclude))
+```
+
+Do a few data transformations.
+```{r 3}
+trials <- add_sub_indices(trials) #add subject indices to the df. These will match the indices used in Stan.
+
+#add a column with completed trial numbers - the trial indices if you ignore late trials. These will match the "t" trial numbers used in the Stan models
+trials <- do.call(rbind,by(trials,trials$sub_index,add_trials_nl))
+trials$overall_trial_nl <- 1:nrow(trials) #get the overall trial number ignoring late trials and collapsing across subjects
+
+#get mean-centered trial and block predictors for easier fitting in Stan
+trials$trial_nl_cent <- trials$trial_nl - mean(trials$trial_nl)                                                          
+trials$block_cent <- trials$block - mean(trials$block) 
+
+#Create indices from 1:n_f for each fractal image. To do this, first create a mini-df with one column having all the fA_img values and the other two
+#columns having indices for fA and fB. This assumes that every fA_img is paired with a unique fB_img.
+f_index_df <- data.frame(fA_img = unique(trials$fA_img),fA_ix = 1:length(unique(trials$fA_img)),fB_ix = (1:length(unique(trials$fA_img))+length(unique(trials$fA_img))))
+trials <- left_join(trials,f_index_df,by="fA_img")
+
+#get the chosen fractal index
+trials <- trials %>% mutate(chosen_frac = ifelse(choice == "fA",fA_ix,fB_ix))
+trials <- trials %>% mutate(unchosen_frac = ifelse(choice == "fA",fB_ix,fA_ix))
+
+#add a column with the affect probe number for each subject (999 if no probe response). These will be passed into Stan
+trials <- add_probe_number(trials,newcol="dec_probe_number",val_col="dec_rate") #for decision probes
+trials <- add_probe_number(trials,newcol="feed_probe_number",val_col="feed_rate") #for decision probes
+```
+
+# Data review
+
+```{r}
+percentage_plots(trials,"stay")
+```
+
+```{r}
+choice_fit <- lmer(choice_numeric ~ fB_win_prob + fA_win_prob + (1|id),trials)
+summary(choice_fit)
+```
+
+```{r}
+stay_fit <- lmer(stay ~ chosen_out + unchosen_out + (1|id),trials)
+summary(stay_fit)
+```
+```{r}
+ages <- subs$age[subs$age != 999]
+mean(ages)
+sd(ages)
+```
+
+```{r}
+sum(subs$gender=="Male")/sum(subs$gender!=999)
+```
+
+```{r}
+sum(subs$gender=="Female")/sum(subs$gender!=999)
+```
+
+```{r}
+sum(subs$gender=="Non-binary")/sum(subs$gender!=999)
+```
+
+# Choice models
+
+Fitting Q-learning models to choice.
+
+## Raw Q-learning
+
+Fitting a basic Q-learning model with no nuisance parameters.
+```{r 5}
+basic_qlearn <- fit_stan_model(stan_file = paste0(stan_model_dir_s22,"basic_qlearn.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         skip=c("waic","check_csvs"),
+                         n_t=104)
+```
+
+## Q-learning with autocorrelation
+
+Now adding an autocorrelation component to the Q-learning model.
+```{r}
+autocor_qlearn <- fit_stan_model(stan_file = paste0(stan_model_dir_s22,"autocor_qlearn.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         skip=c("waic","check_csvs"),
+                         n_t=104)
+```
+
+```{r}
+fsml_compare(basic_qlearn,autocor_qlearn)
+```
+Autocorrelation model fits better.
+
+## Q-learning with autocorrelation and side bias
+
+Adding left-side bias as a parameter that influence choices.
+```{r}
+autocor_qlearn_sidebias <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"autocor_qlearn_sidebias.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         skip=c("waic","check_csvs"),
+                         n_t=104)
+```
+
+```{r}
+fsml_compare(autocor_qlearn,autocor_qlearn_sidebias)
+```
+Not sufficient evidence that the sidebias model fits better.
+
+## Q-learning with autocorrelation and forgetting, no independent decay parameter
+
+Update Q values of fractals not presented toward 0
+```{r}
+autocor_alphforget_qlearn <- fit_stan_model(stan_file = paste0(stan_model_dir_s22,"autocor_alphforget_qlearn.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         skip=c("waic","check_csvs"),
+                         n_t=104)
+```
+
+```{r}
+fsml_compare(autocor_qlearn,autocor_alphforget_qlearn)
+```
+Not sufficient evidence that this fits better.
+
+## Q-learning with autocorrelation and forgetting, independent decay parameter
+
+Update Q values of fractals not presented toward 0, using an independent learning rate for this process
+```{r}
+autocor_hierforget_qlearn <- fit_stan_model(stan_file = paste0(stan_model_dir_s22,"autocor_hierforget_qlearn.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         skip=c("waic","check_csvs"),
+                         n_t=104)
+```
+
+```{r}
+fsml_compare(autocor_qlearn,autocor_alphforget_qlearn,autocor_hierforget_qlearn)
+```
+The model with an independent decay parameter fits best.
+
+## Winning choice model review
+
+Verifying that the effect of reward on choice is consistently positive by looking at the subject-level mean beta values.
+```{r}
+ncp_mean_hist(autocor_hierforget_qlearn$sum,"beta")
+```
+Yes, it is.
+
+Looking at the mean effects of each parameter.
+```{r}
+filt_sum(autocor_hierforget_qlearn$sum,"mu")
+```
+
+# Affect models
+
+## Model comparison
+
+First, fitting models that include variables only for one theory. These fill be fit without shrinkage priors, since they include only 2-3 predictors of interest each.
+
+Simple value model
+```{r}
+simp_val_noshrink <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"simp_val_noshrink.stan"),
+                                    model_out_dir = model_out_dir,
+                                    raw_data = trials,
+                                    study = "s22fu",
+                                    skip=c("waic","check_csvs"),
+                                    n_t=104)
+```
+
+PE model
+```{r}
+pe_noshrink <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"pe_noshrink.stan"),
+                                    model_out_dir = model_out_dir,
+                                    raw_data = trials,
+                                    study = "s22fu",
+                                    iter_warmup = 4000,
+                                    iter_sampling = 4000,
+                                    adapt_delta = .95,
+                                    max_treedepth = 12,
+                                    skip=c("waic","check_csvs"),
+                                    n_t=104)
+```
+
+Regret model
+```{r}
+regret_noshrink <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"regret_noshrink.stan"),
+                                    model_out_dir = model_out_dir,
+                                    raw_data = trials,
+                                    study = "s22fu",
+                                    skip=c("waic","check_csvs"),
+                                    n_t=104)
+```
+
+
+Fitting the combined model (without a shrinkage prior, for greater comparability).
+```{r}
+combined_noshrink <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"combined_noshrink.stan"),
+                                    model_out_dir = model_out_dir,
+                                    raw_data = trials,
+                                    study = "s22fu",
+                                    skip=c("waic","check_csvs"),
+                                    n_t=104)
+```
+
+Finally, fitting a null model (just nuisance parameters, no predictors of interest).
+```{r}
+null_affect <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"null_affect.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         skip=c("waic","check_csvs"),
+                         n_t=104)
+```
+
+Now, comparing each theory-specific model to the null
+```{r}
+fsml_compare(simp_val_noshrink,null_affect)
+fsml_compare(regret_noshrink,null_affect)
+fsml_compare(pe_noshrink,null_affect)
+```
+
+
+Comparing each theory-specific model to the combined model.
+```{r}
+fsml_compare(combined_noshrink,pe_noshrink,regret_noshrink,simp_val_noshrink)
+```
+
+## Posterior effect estimates
+
+### Main analysis
+
+Looking at the effect estimates for each of the individual variables.
+
+First, refitting the combined model with a shrinkage prior.
+```{r}
+combined_shrink <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"combined_shrink.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         skip=c("waic","check_csvs"),
+                         n_t=104)
+```
+
+Calculating R-squared for this model
+```{r}
+dec_rsq <- mcmc_rsq(combined_shrink$fit,"dec_pred","d_resid",print_plot=FALSE)
+dec_rsq$sum
+```
+```{r}
+feed_rsq <- mcmc_rsq(combined_shrink$fit,"feed_pred","f_resid",print_plot=FALSE)
+feed_rsq$sum
+```
+
+Now, examining 90% credible intervals for the effects
+```{r}
+cs_mudraws <- get_draws_df(combined_shrink$mod,combined_shrink$fit,vars=c("dpiw_mu[1]","dpiw_mu[2]","dpiw_mu[3]","fpiw_mu[1]","fpiw_mu[2]","fpiw_mu[3]","fpiw_mu[4]"))
+cs_mudraws_origform <- cs_mudraws %>% transmute(choice_TDE = -`dpiw_mu[1]`, Q_ch = `dpiw_mu[1]` + `dpiw_mu[2]` + `dpiw_mu[3]`, Q_regret=`dpiw_mu[3]`, 
+                                                      PWRD = -`fpiw_mu[1]`,RPE = -`fpiw_mu[2]`,reward = `fpiw_mu[1]` + `fpiw_mu[2]` + `fpiw_mu[3]` + `fpiw_mu[4]`, regret = `fpiw_mu[4]`)
+mcmc_areas(
+  cs_mudraws_origform,
+  area_method = "scaled height",
+  prob = 0.5, # 80% intervals
+  prob_outer = 0.9, # 99%
+  point_est = "mean"
+)
+```
+Because two of the prediction error effects are in the wrong direction, it raises the question of whether the combined model still fits better without these prediction-inconsistent effects.
+Refitting the model with no effects of TDE or RPE.
+```{r}
+combined_noshrink_noVQf <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"combined_noshrink_noVQf.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         skip=c("waic","check_csvs"),
+                         n_t=104)
+```
+
+```{r}
+fsml_compare(combined_noshrink_noVQf,pe_noshrink,regret_noshrink,simp_val_noshrink)
+```
+Yes, the combined model is still clearly superior.
+
+### Supplementary effect estimates
+
+Estimating these effects a few different ways as a robustness check on the above estimates, and for desriptive purposes.
+
+Looking at the effect estimates for the raw valence predictors
+```{r}
+mcmc_areas(
+  cs_mudraws,
+  area_method = "scaled height",
+  prob = 0.5, # 80% intervals
+  prob_outer = 0.9, # 99%
+  point_est = "mean"
+)
+```
+
+Running the combined model with no nuisance parameters added to the choice model
+```{r}
+combined_shrink_rawQ <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"combined_shrink_rawQ.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         skip=c("waic","check_csvs"),
+                         n_t=104)
+```
+
+Plotting effects
+```{r}
+csr_mudraws <- get_draws_df(combined_shrink_rawQ$mod,combined_shrink_rawQ$fit,vars=c("dpiw_mu[1]","dpiw_mu[2]","dpiw_mu[3]","fpiw_mu[1]","fpiw_mu[2]","fpiw_mu[3]","fpiw_mu[4]"))
+
+csr_mudraws_origform <- csr_mudraws %>% transmute(choice_TDE = -`dpiw_mu[1]`, Q_ch = `dpiw_mu[1]` + `dpiw_mu[2]` + `dpiw_mu[3]`, Q_regret=`dpiw_mu[3]`, 
+                                                      PWRD = -`fpiw_mu[1]`,RPE = -`fpiw_mu[2]`,reward = `fpiw_mu[1]` + `fpiw_mu[2]` + `fpiw_mu[3]` + `fpiw_mu[4]`, regret = `fpiw_mu[4]`)
+mcmc_areas(
+  csr_mudraws_origform,
+  area_method = "scaled height",
+  prob = 0.5, # 80% intervals
+  prob_outer = 0.9, # 99%
+  point_est = "mean"
+)
+```
+
+Now, examining effects from each theory-specific model.
+
+Simple value model
+```{r}
+csr_mudraws <- get_draws_df(combined_shrink_rawQ$mod,combined_shrink_rawQ$fit,vars=c("dpiw_mu[1]","dpiw_mu[2]","dpiw_mu[3]","fpiw_mu[1]","fpiw_mu[2]","fpiw_mu[3]","fpiw_mu[4]"))
+
+csr_mudraws_origform <- csr_mudraws %>% transmute(choice_TDE = -`dpiw_mu[1]`, Q_ch = `dpiw_mu[1]` + `dpiw_mu[2]` + `dpiw_mu[3]`, Q_regret=`dpiw_mu[3]`, 
+                                                      PWRD = -`fpiw_mu[1]`,RPE = -`fpiw_mu[2]`,reward = `fpiw_mu[1]` + `fpiw_mu[2]` + `fpiw_mu[3]` + `fpiw_mu[4]`, regret = `fpiw_mu[4]`)
+sv_draws <- simp_val_noshrink$fit$draws(c("dpiw_mu","fpiw_mu"))
+mcmc_areas(
+  sv_draws,
+  area_method = "scaled height",
+  prob = 0.5, # 80% intervals
+  prob_outer = 0.9, # 99%
+  point_est = "mean"
+)
+```
+
+PE model
+```{r}
+pe_draws <- pe_noshrink$fit$draws(c("dpiw_mu","fpiw_mu"))
+temp <- mcmc_areas(
+  pe_draws,
+  area_method = "scaled height",
+  prob = 0.5, # 80% intervals
+  prob_outer = 0.9, # 99%
+  point_est = "mean"
+  )
+```
+
+Regret model
+```{r}
+regret_draws <- regret_noshrink$fit$draws(c("dpiw_mu","fpiw_mu"))
+mcmc_areas(
+  regret_draws,
+  area_method = "scaled height",
+  prob = 0.5, # 80% intervals
+  prob_outer = 0.9, # 99%
+  point_est = "mean"
+)
+```
+# Linear algebra reanalysis
+
+```{r}
+#Create direction vectors, where the dimensions are int he order:
+#       Vb,Qcd,Qud,Vt,Qcf,rc,ru
+tde <- c(-.5,.5,0,0,0,0,0)
+q_ch <- c(0,1,0,0,0,0,0)
+q_reg <- c(0,.5,-.5,0,0,0,0)
+pwrd <- c(0,0,0,-.5,0,.5,0)
+rpe <- c(0,0,0,0,-.5,.5,0)
+rew <- c(0,0,0,0,0,1,0)
+out_reg <- c(0,0,0,0,0,.5,-.5)
+dvec_mat <- cbind(tde,q_ch,q_reg,pwrd,rpe,rew,out_reg) #turn into matrix
+
+combined_shrink_fit <- load_cmdstan_fit(model_out_dir=model_out_dir,"combined_shrink")
+cs_draws <- combined_shrink_fit$draws(c("dpiw_mu","fpiw_mu")) #get draws array
+#vec_ws <- apply(cs_draws,c(1,2),vec_optim,dvec=dvec_mat) #get vector weights
+#vec_ws_org <- aperm(vec_ws,c(2,3,1)) #rearrange to be in the same order that they were in the draws array
+#dimnames(vec_ws_org)[[3]] <- c("tde","q_ch","q_reg","pwrd","rpe","rew","out_reg") #name meaningfully
+#save(vec_ws_org,file=paste0(model_out_dir,"vec_ws_s2.RData"))
+load(paste0(model_out_dir,"vec_ws_s2.RData"))
+```
+
+```{r}
+#plot raw weights, in the order Q_ch,choice; V_block; Q_unch; r_ch;, Q_ch,out; V_trial; r_unch
+raw_eff_intervals<- create_interval_plot(arr = cs_draws,names = c("fpiw_mu[4]","fpiw_mu[3]","fpiw_mu[2]","fpiw_mu[1]","dpiw_mu[3]","dpiw_mu[2]","dpiw_mu[1]"),
+                                         color_mapping = c("fpiw_mu[1]" = "#414141","fpiw_mu[2]" = "#414141","fpiw_mu[3]" = "#414141","fpiw_mu[4]" = "#414141",
+                                                           "dpiw_mu[1]" = "#414141","dpiw_mu[2]" = "#414141","dpiw_mu[3]" = "#414141",
+                                                           "fpiw_mu[1]_med" = "black","fpiw_mu[2]_med" = "black","fpiw_mu[3]_med" = "black","fpiw_mu[4]_med" = "black",
+                                                           "dpiw_mu[1]_med" = "black","dpiw_mu[2]_med" = "black","dpiw_mu[3]_med" = "black"),
+                                          xmin = -.1,xmax = .85,
+                                          percentiles = c(0.025,.25,.50,.75,.975),
+                                          dot_size = 3)
+raw_eff_intervals
+ggsave("~/Documents/active_manuscript/manuscript/figures/raw_eff_intervals_s2.png",raw_eff_intervals,width=5,height=3)
+```
+
+
+```{r}
+#plot normed weights
+mn_data <- apply(cs_draws,c(1,2),function(x) sum(abs(x))) #get the manhattan norms for each data vector by summing the absolute values
+
+comb_array <- abind(vec_ws_org,mn_data,along=3) #staple mn_data to the back of the third dimension of the vector weight array
+vec_ws_norm <- apply(comb_array,c(1,2), get_ports) #get portions of relationship accounted for
+
+#have to rearrange and name again
+vec_ws_norm_org <- aperm(vec_ws_norm,c(2,3,1)) 
+dimnames(vec_ws_norm_org)[[3]] <- c("tde","q_ch","q_reg","pwrd","rpe","rew","out_reg","resid") #name meaningfully
+```
+
+Get stats
+```{r}
+quantile(vec_ws_norm_org[,,"q_ch"],c(.05,.95,.50))
+round(sum(vec_ws_norm_org[,,"q_ch"] > 0)/4000 * 100,1)
+
+quantile(vec_ws_norm_org[,,"rew"],c(.05,.95,.50))
+round(sum(vec_ws_norm_org[,,"rew"] > 0)/4000 * 100,1)
+
+quantile(vec_ws_norm_org[,,"pwrd"],c(.05,.95,.50))
+round(sum(vec_ws_norm_org[,,"pwrd"] > 0)/4000 * 100,1)
+
+quantile(vec_ws_norm_org[,,"out_reg"],c(.05,.95,.50))
+round(sum(vec_ws_norm_org[,,"out_reg"] > 0)/4000 * 100,1)
+```
+
+Plot intervals
+```{r}
+#create interval plots for manhattan norm ratios
+variable_intervals_s2<- create_interval_plot(arr = vec_ws_norm_org,names = c("out_reg","pwrd","rpe","rew","q_reg","tde","q_ch"),
+                                          xmin = -.012,xmax = .48)
+save(variable_intervals_s2,file="~/Documents/active_manuscript/manuscript/figures/variable_intervals_s2.RData")
+```
+
+
+```{r}
+#get sub-arrays of normed weights for each theory
+sv_ws <- vec_ws_norm_org[,,c(2,6)] 
+pe_ws <- vec_ws_norm_org[,,c(1,4,5)] 
+reg_ws <- vec_ws_norm_org[,,c(3,7)] 
+
+#sum them to get total theory weights
+sv_ports <- apply(sv_ws,c(1,2),sum) 
+pe_ports <- apply(pe_ws,c(1,2),sum)
+reg_ports <- apply(reg_ws,c(1,2),sum)
+
+thr_ports <- array(c(sv_ports,pe_ports,reg_ports,vec_ws_norm_org[,,8]),dim=c(1000,4,4))
+dimnames(thr_ports)[[3]] <- c("sv","pe","cc","resid") #name meaningfully
+```
+
+Get stats for theory vectors
+```{r}
+quantile(thr_ports[,,"sv"],c(.05,.95,.50))
+round(sum(thr_ports[,,"sv"] > 0)/4000 * 100,1)
+
+quantile(thr_ports[,,"pe"],c(.05,.95,.50))
+round(sum(thr_ports[,,"pe"] > 0)/4000 * 100,1)
+
+quantile(thr_ports[,,"cc"],c(.05,.95,.50))
+round(sum(thr_ports[,,"cc"] > 0)/4000 * 100,1)
+```
+Calculate differences between theory vectors, getting stats
+```{r}
+sv_cc <- thr_ports[,,"sv"] - thr_ports[,,"cc"]
+sv_pe <- thr_ports[,,"sv"] - thr_ports[,,"pe"]
+cc_pe <- thr_ports[,,"cc"] - thr_ports[,,"pe"]
+
+quantile(cc_pe,c(.025,.975,.50))
+round(sum(cc_pe > 0)/4000 * 100,1)
+
+quantile(sv_cc,c(.025,.975,.50))
+round(sum(sv_cc > 0)/4000 * 100,1)
+
+quantile(sv_pe,c(.025,.975,.50))
+round(sum(sv_pe > 0)/4000 * 100,1)
+```
+
+Plot theory vectors
+```{r}
+theory_intervals_s2 <- create_interval_plot(arr = thr_ports,names = c("resid","cc","pe","sv"),
+                                          xmin = -.012,xmax = .8)
+save(theory_intervals_s2,file="~/Documents/active_manuscript/manuscript/figures/theory_intervals_s2.RData")
+```
+
+```{r}
+#Get the likelihood of each theory combination...
+
+draw_codes <- apply(thr_ports[,,-4],c(1,2),code_draw) #code each draw according to which theories are non-zero
+#get percentage likelihoods for each theory combination
+paste0("Simple value, PE, regret: ",100*sum(draw_codes == "123")/length(draw_codes))
+paste0("Simple value, PE: ",100*sum(draw_codes == "12")/length(draw_codes))
+paste0("Simple value, regret: ",100*sum(draw_codes == "13")/length(draw_codes))
+paste0("PE, regret: ",100*sum(draw_codes == "23")/length(draw_codes))
+paste0("Simple value: ",100*sum(draw_codes == "1")/length(draw_codes))
+paste0("PE: ",100*sum(draw_codes == "2")/length(draw_codes))
+paste0("Regret: ",100*sum(draw_codes == "3")/length(draw_codes))
+```
+## Compare vectors across studies
+
+Variable vectors
+```{r}
+# load("~/projects/spring_2022_study/output/results/stan_model_fits/final_models/vec_ws_norm_org_s1.RData") #load in Study 1 vectors
+# diff_var_vecs <- vec_ws_norm_org - vec_ws_norm_org_s1
+# save(diff_var_vecs,file=paste0(model_out_dir,"diff_var_vecs.RData"))
+load(paste0(model_out_dir,"diff_var_vecs.RData"))
+
+
+quantile(diff_var_vecs[,,"rew"],c(.025,.975,.50))
+round(sum(diff_var_vecs[,,"rew"] > 0)/4000 * 100,1)
+
+quantile(diff_var_vecs[,,"q_ch"],c(.025,.975,.50))
+round(sum(diff_var_vecs[,,"q_ch"] > 0)/4000 * 100,1)
+
+quantile(diff_var_vecs[,,"rpe"],c(.025,.975,.50))
+round(sum(diff_var_vecs[,,"rpe"] < 0)/4000 * 100,1)
+
+quantile(diff_var_vecs[,,"out_reg"],c(.025,.975,.50))
+round(sum(diff_var_vecs[,,"out_reg"] < 0)/4000 * 100,1)
+
+quantile(diff_var_vecs[,,"pwrd"],c(.025,.975,.50))
+round(sum(diff_var_vecs[,,"pwrd"] < 0)/4000 * 100,1)
+
+quantile(diff_var_vecs[,,"q_reg"],c(.025,.975,.50))
+round(sum(diff_var_vecs[,,"q_reg"] < 0)/4000 * 100,1)
+
+quantile(diff_var_vecs[,,"tde"],c(.025,.975,.50))
+round(sum(diff_var_vecs[,,"tde"] < 0)/4000 * 100,1)
+
+```
+
+Theory vectors
+```{r}
+# load("~/projects/spring_2022_study/output/results/stan_model_fits/final_models/thr_ports_s1.RData")
+# diff_theory_vecs <- thr_ports - thr_ports_s1
+# save(diff_theory_vecs,file=paste0(model_out_dir,"diff_theory_vecs.RData"))
+load(paste0(model_out_dir,"diff_theory_vecs.RData"))
+quantile(diff_theory_vecs[,,"Simple value"],c(.025,.975,.50))
+round(sum(diff_theory_vecs[,,"Simple value"] > 0)/4000 * 100,1)
+
+quantile(diff_theory_vecs[,,"Regret"],c(.025,.975,.50))
+round(sum(diff_theory_vecs[,,"Regret"] < 0)/4000 * 100,1)
+
+quantile(diff_theory_vecs[,,"PE"],c(.025,.975,.50))
+round(sum(diff_theory_vecs[,,"PE"] < 0)/4000 * 100,1)
+```
+# Plot fit vectors
+
+Create a plot of the expected effect vector, the best approximation to this vector, and uncertainties in variable vector lengths and the effect vector.
+```{r}
+eff_mean <- apply(cs_draws,3,mean) #get mean effect vector
+
+#approximate this vector
+mean_vec_ws <- vec_optim(eff_mean,dvec_mat)
+mean_vecs <- matrix(NA,nrow=nrow(dvec_mat),ncol=ncol(dvec_mat))
+for(i in 1:ncol(mean_vecs)){
+  mean_vecs[,i] <- mean_vec_ws[i]*dvec_mat[,i]
+}
+resid_mean <- eff_mean - rowSums(mean_vecs)
+
+#Get fifth and 95th percentile weights for variable vectors
+per5_vecs <- dvec_mat %*% diag(apply(vec_ws_org,3,quantile,probs=.05))
+per95_vecs <- dvec_mat %*% diag(apply(vec_ws_org,3,quantile,probs=.95))
+
+#reorder everything so that you avoid vectors on top of the axes as much as possible when plotting
+#make the order PE, CC, SV, with RPE before PWRD
+mean_vecs <- mean_vecs[,c(1,3,2,5,4,7,6)]
+per5_vecs <- per5_vecs[,c(1,3,2,5,4,7,6)]
+per95_vecs <- per95_vecs[,c(1,3,2,5,4,7,6)]
+
+vec_theory <- c("PE","CC","SV","PE","PE","CC","SV") #theories to which the vectors belong
+
+
+# Establish combinations of dimensions to show in each plot
+combinations <- list(
+  c(1, 2),
+  c(3, 2),
+  c(5, 6),
+  c(4, 7)
+)
+
+plot_list <- list()
+
+jitter <- .001 #amount to jitter each error bar when they're overlapping
+#create 2D plots
+
+
+for(c in 1:length(combinations)) {
+  combination <- combinations[[c]]
+  
+  # Create dfs for plotting
+  mean_vecs_df <- data.frame(x=numeric(),y=numeric(),xend=numeric(),yend=numeric(),vector=character())
+  bars_df <- data.frame(x=numeric(),y=numeric(),xend=numeric(),yend=numeric(),vector=character())
+  
+  # Initialize start x and start y
+  start_x <- 0
+  start_y <- 0
+  
+  for (i in 1:length(vec_theory)) {
+    # get the current vectors
+    mean_vec <- mean_vecs[,i] 
+    per5_vec <- per5_vecs[,i]
+    per95_vec <- per95_vecs[,i]   
+    
+    #fill out dfs
+    if(mean_vec[combination[1]] != 0 || mean_vec[combination[2]] != 0){
+      mean_vecs_df <- rbind(mean_vecs_df,data.frame(x=start_x,y=start_y,xend=start_x+mean_vec[combination[1]],yend=start_y+mean_vec[combination[2]],vector=paste0(vec_theory[i],"_m")))
+      bars_df <- rbind(bars_df,data.frame(x=start_x+per5_vec[combination[1]],y=start_y+per5_vec[combination[2]],xend=start_x+per95_vec[combination[1]],
+                                          yend=start_y+per95_vec[combination[2]],vector=vec_theory[i])) #for main line semgemnt
+      bars_df <- rbind(bars_df,create_perpendicular_segments(x=start_x+per5_vec[combination[1]],y=start_y+per5_vec[combination[2]],
+                                                             xend=start_x+per95_vec[combination[1]],yend=start_y+per95_vec[combination[2]],
+                                                             vector=vec_theory[i])) #for brackets
+    }
+    
+    # Increment start x and start y by the mean
+    start_x <- start_x + mean_vec[combination[1]]
+    start_y <- start_y + mean_vec[combination[2]]
+  }
+  
+  mean_vecs_df <- rbind(mean_vecs_df,data.frame(x=start_x,y=start_y,xend=start_x + resid_mean[combination[1]],yend= start_y + resid_mean[combination[2]],vector="resid")) #add residual mean
+  mean_vecs_df <- rbind(mean_vecs_df,data.frame(x=0,y=0,xend=eff_mean[combination[1]],yend=eff_mean[combination[2]],vector="effects")) #add effect mean
+  
+  eff_x <- as.data.frame(cs_draws[,,combination[1]])
+  eff_y <- as.data.frame(cs_draws[,,combination[2]])
+  
+  contour_df <- data.frame(x=as.vector(unlist(eff_x)),y=as.vector(unlist(eff_y)),vector="effects")#create contour_df
+  
+  mean_vecs_df <- mean_vecs_df[nrow(mean_vecs_df):1,]
+  bars_df <- bars_df[nrow(bars_df):1,]
+  
+  margin_factor <- -.039
+  #Make plot-specific adjustments
+  if (c == 1){
+    #jitter overlapping error bars
+    bars_df[1:3,c(1,3)] <- bars_df[1:3,c(1,3)] - jitter
+    bars_df[4:6,c(2,4)] <- bars_df[4:6,c(2,4)] - .0013
+    #set plot limits
+    x_start <- .5*margin_factor
+    x_end <- NA
+    y_start <- .85*margin_factor
+    y_end <- NA
+  } else if (c == 2){
+    mean_vecs_df <- filter(mean_vecs_df,vector != "resid") #residual shows on plot but should be 0
+    #set plot limits
+    x_start <- NA
+    x_end <- NA
+    y_start <- .85*margin_factor
+    y_end <- NA
+  } else if (c == 3){
+    #jitter overlapping error bars
+    bars_df[1:3,c(1,3)] <- bars_df[1:3,c(1,3)] - jitter
+    bars_df[4:6,c(1,3)] <- bars_df[4:6,c(1,3)] - jitter
+    bars_df[7:9,c(1,3)] <- bars_df[7:9,c(1,3)] + jitter
+    #set plot limits
+    x_start <- 1.2*margin_factor
+    x_end <- NA
+    y_start <- .6*margin_factor
+    y_end <- NA
+  } else if (c == 4){
+    bars_df[4:6,c(2,4)] <- bars_df[4:6,c(2,4)] + .0003
+    mean_vecs_df <- filter(mean_vecs_df,vector != "resid") #residual shows on plot but should be 0
+    #set plot limits
+    x_start <- -.06
+    x_end <- -.12*margin_factor
+    y_start <- NA
+    y_end <- -.04*margin_factor
+  }
+  
+  # create plot for contour, means, error bars
+  plot <- ggplot() +
+    geom_vline(aes(xintercept=0), color="black",size = .6) +
+    geom_hline(aes(yintercept=0), color="black",size = .6) +
+    geom_density_2d(data=contour_df,aes(x=x,y=y,color="#FAFAFA",alpha=..level..)) +
+    geom_segment(data = mean_vecs_df, aes(x = x, y = y, xend = xend, yend = yend, color = vector),
+                 arrow = arrow(type = "closed", length = unit(0.15, "inches")),size = 6.5) +
+    geom_segment(data = bars_df, aes(x = x, y = y, xend = xend, yend = yend, color = vector),
+                 size = 0.75) +
+    scale_color_manual(values=c("SV"="dark blue","PE"="dark green","CC"="#9B1010","resid"="gray","effects"="black",
+                                "SV_m"="#3368FF","PE_m"="#6fc276","CC_m"="#df4a34","resid_m"="gray","effects_m"="black")) +
+    theme(panel.background = element_rect(fill = "#F0F0F0"),
+          legend.position = "none",
+          axis.text = element_blank(),
+          axis.ticks = element_blank()) +
+    coord_cartesian(xlim=c(x_start, x_end),
+                    ylim=c(y_start, y_end)) +
+    labs(title = NULL, x = NULL, y = NULL)
+  
+  plot_list[[c]] <- plot
+}
+# Grid arrange and display
+
+grid_ob <- gridExtra::grid.arrange(grobs = plot_list, ncol = 2)
+ggsave("/Users/dp/projects/spring_2022_study/manuscript/figures/s2_estvec.png",grid_ob,width=12,height=12)
+
+```
+
+# Do linear algebra analysis on model with raw Q values
+```{r}
+#Create direction vectors, where the dimensions are int he order:
+#       Vb,Qcd,Qud,Vt,Qcf,rc,ru
+tde <- c(-.5,.5,0,0,0,0,0)
+q_ch <- c(0,1,0,0,0,0,0)
+q_reg <- c(0,.5,-.5,0,0,0,0)
+pwrd <- c(0,0,0,-.5,0,.5,0)
+rpe <- c(0,0,0,0,-.5,.5,0)
+rew <- c(0,0,0,0,0,1,0)
+out_reg <- c(0,0,0,0,0,.5,-.5)
+dvec_mat <- cbind(tde,q_ch,q_reg,pwrd,rpe,rew,out_reg) #turn into matrix
+
+combined_shrink_rawQ_fit <- load_cmdstan_fit(model_out_dir=model_out_dir,"combined_shrink_rawQ")
+csr_draws <- combined_shrink_rawQ_fit$draws(c("dpiw_mu","fpiw_mu")) #get draws array
+
+vec_ws_rq <- apply(csr_draws,c(1,2),vec_optim,dvec=dvec_mat) #get vector weights
+vec_ws_org_rq <- aperm(vec_ws_rq,c(2,3,1)) #rearrange to be in the same order that they were in the draws array
+dimnames(vec_ws_org_rq)[[3]] <- c("tde","q_ch","q_reg","pwrd","rpe","rew","out_reg") #name meaningfully
+save(vec_ws_org_rq,file=paste0(model_out_dir,"vec_ws_rq_s2.RData"))
+#load(paste0(model_out_dir,"vec_ws_s2.RData"))
+```
+
+
+```{r}
+#plot normed weights
+mn_data_rq<- apply(csr_draws,c(1,2),function(x) sum(abs(x))) #get the manhattan norms for each data vector by summing the absolute values
+
+comb_array_rq <- abind(vec_ws_org_rq,mn_data_rq,along=3) #staple mn_data to the back of the third dimension of the vector weight array
+vec_ws_norm_rq <- apply(comb_array_rq,c(1,2), get_ports) #get portions of relationship accounted for
+
+#have to rearrange and name again
+vec_ws_norm_org_rq <- aperm(vec_ws_norm_rq,c(2,3,1)) 
+dimnames(vec_ws_norm_org_rq)[[3]] <- c("tde","q_ch","q_reg","pwrd","rpe","rew","out_reg","resid") #name meaningfully
+```
+
+Plot intervals
+```{r}
+#create interval plots for manhattan norm ratios
+variable_intervals_s2<- create_interval_plot(arr = vec_ws_norm_org_rq,names = c("out_reg","pwrd","rpe","rew","q_reg","tde","q_ch"),
+                                          xmin = -.012,xmax = .48)
+save(variable_intervals_s2,file="~/Documents/active_manuscript/manuscript/figures/variable_intervals_s2.RData")
+```
+
+
+```{r}
+#get sub-arrays of normed weights for each theory
+sv_ws_rq <- vec_ws_norm_org_rq[,,c(2,6)] 
+pe_ws_rq <- vec_ws_norm_org_rq[,,c(1,4,5)] 
+reg_ws_rq <- vec_ws_norm_org_rq[,,c(3,7)] 
+
+#sum them to get total theory weights
+sv_ports_rq <- apply(sv_ws_rq,c(1,2),sum) 
+pe_ports_rq <- apply(pe_ws_rq,c(1,2),sum)
+reg_ports_rq <- apply(reg_ws_rq,c(1,2),sum)
+
+thr_ports_rq <- array(c(sv_ports_rq,pe_ports_rq,reg_ports_rq,vec_ws_norm_org_rq[,,8]),dim=c(1000,4,4))
+dimnames(thr_ports_rq)[[3]] <- c("sv","pe","cc","resid") #name meaningfully
+```
+
+Plot theory vectors
+```{r}
+theory_intervals_s2 <- create_interval_plot(arr = thr_ports_rq,names = c("resid","cc","pe","sv"),
+                                          xmin = -.012,xmax = .8)
+save(theory_intervals_s2,file="~/Documents/active_manuscript/manuscript/figures/theory_intervals_s2.RData")
+```
+
+```{r}
+#Get the likelihood of each theory combination...
+
+draw_codes <- apply(thr_ports[,,-4],c(1,2),code_draw) #code each draw according to which theories are non-zero
+#get percentage likelihoods for each theory combination
+paste0("Simple value, PE, regret: ",100*sum(draw_codes == "123")/length(draw_codes))
+paste0("Simple value, PE: ",100*sum(draw_codes == "12")/length(draw_codes))
+paste0("Simple value, regret: ",100*sum(draw_codes == "13")/length(draw_codes))
+paste0("PE, regret: ",100*sum(draw_codes == "23")/length(draw_codes))
+paste0("Simple value: ",100*sum(draw_codes == "1")/length(draw_codes))
+paste0("PE: ",100*sum(draw_codes == "2")/length(draw_codes))
+paste0("Regret: ",100*sum(draw_codes == "3")/length(draw_codes))
+```
+
+# ARL analyses
+
+First, fit a model to valence ratings (at feedback)
+```{r}
+trials_frate <- trials %>% filter(block_feedrate == 1) #get only trials from feedback rating blocks
+
+ratings_arl <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"ratings_arl.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials_frate,
+                         study = "s22fu",
+                         n_t=52,
+                         chains = 3)
+
+ra_asens_draws <- ratings_arl_fit$draws("aff_sens_mu")
+mcmc_areas(
+  ra_asens_draws,
+  area_method = "scaled height",
+  prob = 0.9,
+  prob_outer = 0.99,
+  point_est = "median"
+) +
+  coord_cartesian(xlim=c(0,NA))
+
+ra_beta_draws <- ratings_arl_fit$draws("beta_mu")
+mcmc_areas(
+  ra_beta_draws,
+  area_method = "scaled height",
+  prob = 0.9,
+  prob_outer = 0.99,
+  point_est = "median"
+) +
+  coord_cartesian(xlim=c(0,NA))
+```
+
+Next, to model-predicted valence ratings (at feedback)
+```{r}
+model_pred_arl <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"model_pred_arl.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         n_t=104,
+                         chains = 3)
+
+mpa_asens_draws <- model_pred_arl$fit$draws("aff_sens_mu")
+mcmc_areas(
+  mpa_asens_draws,
+  area_method = "scaled height",
+  prob = 0.9,
+  prob_outer = 0.99,
+  point_est = "median"
+) +
+  coord_cartesian(xlim=c(0,NA))
+
+mpa_beta_draws <- model_pred_arl$fit$draws("beta_mu")
+mcmc_areas(
+  mpa_beta_draws,
+  area_method = "scaled height",
+  prob = 0.9,
+  prob_outer = 0.99,
+  point_est = "median"
+) +
+  coord_cartesian(xlim=c(0,NA))
+```
