@@ -88,16 +88,16 @@ stan_data_s22fu <- function(trials,n_t){
 }
 
 #adds a column for previous valence rating to the trial-level dataset, returning that dataset
-add_prevrate <- function(df,rat_col_name){
-  df$prev_rate <- 0
+add_prevrate <- function(df,rat_col_name,pr_col_name="prev_rate"){
+  df[pr_col_name] <- 0
   #for each trial in the block past the first...
   for(t in 2:nrow(df)){
     #if there was a rating on the previous trial...
     if(!is.na(df[t-1,rat_col_name])){
-      df$prev_rate[t] <- df[t-1,rat_col_name] #that's the prev_rate for this trial...
+      df[t,pr_col_name] <- df[t-1,rat_col_name] #that's the prev_rate for this trial...
     } else{
       #otherwise, the prev_rate is the previous rating from the previous trial (the most recent rating)
-      df$prev_rate[t] <- df$prev_rate[t-1]
+      df[t,pr_col_name] <- df[t-1,pr_col_name]
     } 
   }
   return(df)

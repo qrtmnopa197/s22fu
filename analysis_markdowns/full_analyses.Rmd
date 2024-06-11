@@ -12,7 +12,7 @@ This markdown contains the full set of analyses done on the s22 follow-up study.
 Loading in functions and data; setting paths and options.
 ```{r 1, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-options(mc.cores=6)
+options(mc.cores=12)
 
 ##SET MANUALLY
 path_to_project_directory <- "~/projects/s22_follow_up/"
@@ -113,6 +113,7 @@ summary(choice_fit)
 stay_fit <- lmer(stay ~ chosen_out + unchosen_out + (1|id),trials)
 summary(stay_fit)
 ```
+
 ```{r}
 ages <- subs$age[subs$age != 999]
 mean(ages)
@@ -323,6 +324,7 @@ Calculating R-squared for this model
 dec_rsq <- mcmc_rsq(combined_shrink$fit,"dec_pred","d_resid",print_plot=FALSE)
 dec_rsq$sum
 ```
+
 ```{r}
 feed_rsq <- mcmc_rsq(combined_shrink$fit,"feed_pred","f_resid",print_plot=FALSE)
 feed_rsq$sum
@@ -356,6 +358,23 @@ combined_noshrink_noVQf <- fit_stan_model(stan_file = paste0(stan_model_dir_s22f
 fsml_compare(combined_noshrink_noVQf,pe_noshrink,regret_noshrink,simp_val_noshrink)
 ```
 Yes, the combined model is still clearly superior.
+
+### Exponential decay
+How does the fit look when we assume exponentially decaying effects, as in Study 1?
+```{r}
+combined_shrink_exdec <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"combined_shrink_exdec.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         skip=c("waic","check_csvs"),
+                         n_t=104)
+```
+
+```{r}
+fsml_compare(combined_shrink,combined_shrink_exdec)
+```
+
+Not doing exponential decay works best
 
 ### Supplementary effect estimates
 
@@ -468,11 +487,11 @@ raw_eff_intervals<- create_interval_plot(arr = cs_draws,names = c("fpiw_mu[4]","
                                                            "dpiw_mu[1]" = "#414141","dpiw_mu[2]" = "#414141","dpiw_mu[3]" = "#414141",
                                                            "fpiw_mu[1]_med" = "black","fpiw_mu[2]_med" = "black","fpiw_mu[3]_med" = "black","fpiw_mu[4]_med" = "black",
                                                            "dpiw_mu[1]_med" = "black","dpiw_mu[2]_med" = "black","dpiw_mu[3]_med" = "black"),
-                                          xmin = -.1,xmax = .85,
+                                          xmin = -.2,xmax = .85,
                                           percentiles = c(0.025,.25,.50,.75,.975),
                                           dot_size = 3)
-raw_eff_intervals
-ggsave("~/Documents/active_manuscript/manuscript/figures/raw_eff_intervals_s2.png",raw_eff_intervals,width=5,height=3)
+raw_eff_intervals_s2 <- raw_eff_intervals
+save(raw_eff_intervals_s2,file="~/Documents/active_manuscript/manuscript/figures/raw_eff_intervals_s2.RData")
 ```
 
 
@@ -490,25 +509,27 @@ dimnames(vec_ws_norm_org)[[3]] <- c("tde","q_ch","q_reg","pwrd","rpe","rew","out
 
 Get stats
 ```{r}
-quantile(vec_ws_norm_org[,,"q_ch"],c(.05,.95,.50))
-round(sum(vec_ws_norm_org[,,"q_ch"] > 0)/4000 * 100,1)
+quantile(vec_ws_norm_org[,,"q_ch"],c(.50,.025,.975))
+round(mean(vec_ws_norm_org[,,"q_ch"] > 0) * 100,1)
 
-quantile(vec_ws_norm_org[,,"rew"],c(.05,.95,.50))
-round(sum(vec_ws_norm_org[,,"rew"] > 0)/4000 * 100,1)
+quantile(vec_ws_norm_org[,,"rew"],c(.50,.025,.975))
+round(mean(vec_ws_norm_org[,,"rew"] > 0) * 100,1)
 
-quantile(vec_ws_norm_org[,,"pwrd"],c(.05,.95,.50))
-round(sum(vec_ws_norm_org[,,"pwrd"] > 0)/4000 * 100,1)
+quantile(vec_ws_norm_org[,,"pwrd"],c(.50,.025,.975))
+round(mean(vec_ws_norm_org[,,"pwrd"] > 0) * 100,1)
 
-quantile(vec_ws_norm_org[,,"out_reg"],c(.05,.95,.50))
-round(sum(vec_ws_norm_org[,,"out_reg"] > 0)/4000 * 100,1)
+quantile(vec_ws_norm_org[,,"out_reg"],c(.50,.025,.975))
+round(mean(vec_ws_norm_org[,,"out_reg"] > 0) * 100,1)
 ```
 
 Plot intervals
 ```{r}
 #create interval plots for manhattan norm ratios
 variable_intervals_s2<- create_interval_plot(arr = vec_ws_norm_org,names = c("out_reg","pwrd","rpe","rew","q_reg","tde","q_ch"),
-                                          xmin = -.012,xmax = .48)
-save(variable_intervals_s2,file="~/Documents/active_manuscript/manuscript/figures/variable_intervals_s2.RData")
+                                          xmin = -.012,xmax = .48) +
+                        theme(panel.grid.major.x = element_line(color = "#DCDCDC", size = .47),
+                              panel.background = element_rect(fill = "white", color = NA))
+save(variable_intervals_s2,file="~/Documents/active_manuscripts/s22/figures/variable_intervals_s2.RData")
 ```
 
 
@@ -529,14 +550,14 @@ dimnames(thr_ports)[[3]] <- c("sv","pe","cc","resid") #name meaningfully
 
 Get stats for theory vectors
 ```{r}
-quantile(thr_ports[,,"sv"],c(.05,.95,.50))
-round(sum(thr_ports[,,"sv"] > 0)/4000 * 100,1)
+quantile(thr_ports[,,"sv"],c(.50,.025,.975))
+round(mean(thr_ports[,,"sv"] > 0) * 100,1)
 
-quantile(thr_ports[,,"pe"],c(.05,.95,.50))
-round(sum(thr_ports[,,"pe"] > 0)/4000 * 100,1)
+quantile(thr_ports[,,"pe"],c(.50,.025,.975))
+round(mean(thr_ports[,,"pe"] > 0) * 100,1)
 
-quantile(thr_ports[,,"cc"],c(.05,.95,.50))
-round(sum(thr_ports[,,"cc"] > 0)/4000 * 100,1)
+quantile(thr_ports[,,"cc"],c(.50,.025,.975))
+round(mean(thr_ports[,,"cc"] > 0) * 100,1)
 ```
 Calculate differences between theory vectors, getting stats
 ```{r}
@@ -557,8 +578,10 @@ round(sum(sv_pe > 0)/4000 * 100,1)
 Plot theory vectors
 ```{r}
 theory_intervals_s2 <- create_interval_plot(arr = thr_ports,names = c("resid","cc","pe","sv"),
-                                          xmin = -.012,xmax = .8)
-save(theory_intervals_s2,file="~/Documents/active_manuscript/manuscript/figures/theory_intervals_s2.RData")
+                                          xmin = -.012,xmax = .8) +
+                        theme(panel.grid.major.x = element_line(color = "#DCDCDC", size = 1),
+                              panel.background = element_rect(fill = "white", color = NA))
+save(theory_intervals_s2,file="~/Documents/active_manuscripts/s22/figures/theory_intervals_s2.RData")
 ```
 
 ```{r}
@@ -636,140 +659,22 @@ for(i in 1:ncol(mean_vecs)){
 }
 resid_mean <- eff_mean - rowSums(mean_vecs)
 
-#Get fifth and 95th percentile weights for variable vectors
-per5_vecs <- dvec_mat %*% diag(apply(vec_ws_org,3,quantile,probs=.05))
-per95_vecs <- dvec_mat %*% diag(apply(vec_ws_org,3,quantile,probs=.95))
 
-#reorder everything so that you avoid vectors on top of the axes as much as possible when plotting
 #make the order PE, CC, SV, with RPE before PWRD
 mean_vecs <- mean_vecs[,c(1,3,2,5,4,7,6)]
-per5_vecs <- per5_vecs[,c(1,3,2,5,4,7,6)]
-per95_vecs <- per95_vecs[,c(1,3,2,5,4,7,6)]
 
 vec_theory <- c("PE","CC","SV","PE","PE","CC","SV") #theories to which the vectors belong
+                              
+vec_sol_ch1 <- vec_sol_plot(dimx=1,dimy=2,vec_theory,mean_vecs,eff_mean,resid_mean,eff_draws=cs_draws,ci=0.95)
+vec_sol_ch2 <- vec_sol_plot(dimx=3,dimy=2,vec_theory,mean_vecs,eff_mean,resid_mean,eff_draws=cs_draws,ci=0.95,add_resid=F)
+vec_sol_out1 <- vec_sol_plot(dimx=5,dimy=6,vec_theory,mean_vecs,eff_mean,resid_mean,eff_draws=cs_draws,ci=0.95)
+vec_sol_out2 <- vec_sol_plot(dimx=4,dimy=7,vec_theory,mean_vecs,eff_mean,resid_mean,eff_draws=cs_draws,ci=0.95)
+             
 
-
-# Establish combinations of dimensions to show in each plot
-combinations <- list(
-  c(1, 2),
-  c(3, 2),
-  c(5, 6),
-  c(4, 7)
-)
-
-plot_list <- list()
-
-jitter <- .001 #amount to jitter each error bar when they're overlapping
-#create 2D plots
-
-
-for(c in 1:length(combinations)) {
-  combination <- combinations[[c]]
-  
-  # Create dfs for plotting
-  mean_vecs_df <- data.frame(x=numeric(),y=numeric(),xend=numeric(),yend=numeric(),vector=character())
-  bars_df <- data.frame(x=numeric(),y=numeric(),xend=numeric(),yend=numeric(),vector=character())
-  
-  # Initialize start x and start y
-  start_x <- 0
-  start_y <- 0
-  
-  for (i in 1:length(vec_theory)) {
-    # get the current vectors
-    mean_vec <- mean_vecs[,i] 
-    per5_vec <- per5_vecs[,i]
-    per95_vec <- per95_vecs[,i]   
-    
-    #fill out dfs
-    if(mean_vec[combination[1]] != 0 || mean_vec[combination[2]] != 0){
-      mean_vecs_df <- rbind(mean_vecs_df,data.frame(x=start_x,y=start_y,xend=start_x+mean_vec[combination[1]],yend=start_y+mean_vec[combination[2]],vector=paste0(vec_theory[i],"_m")))
-      bars_df <- rbind(bars_df,data.frame(x=start_x+per5_vec[combination[1]],y=start_y+per5_vec[combination[2]],xend=start_x+per95_vec[combination[1]],
-                                          yend=start_y+per95_vec[combination[2]],vector=vec_theory[i])) #for main line semgemnt
-      bars_df <- rbind(bars_df,create_perpendicular_segments(x=start_x+per5_vec[combination[1]],y=start_y+per5_vec[combination[2]],
-                                                             xend=start_x+per95_vec[combination[1]],yend=start_y+per95_vec[combination[2]],
-                                                             vector=vec_theory[i])) #for brackets
-    }
-    
-    # Increment start x and start y by the mean
-    start_x <- start_x + mean_vec[combination[1]]
-    start_y <- start_y + mean_vec[combination[2]]
-  }
-  
-  mean_vecs_df <- rbind(mean_vecs_df,data.frame(x=start_x,y=start_y,xend=start_x + resid_mean[combination[1]],yend= start_y + resid_mean[combination[2]],vector="resid")) #add residual mean
-  mean_vecs_df <- rbind(mean_vecs_df,data.frame(x=0,y=0,xend=eff_mean[combination[1]],yend=eff_mean[combination[2]],vector="effects")) #add effect mean
-  
-  eff_x <- as.data.frame(cs_draws[,,combination[1]])
-  eff_y <- as.data.frame(cs_draws[,,combination[2]])
-  
-  contour_df <- data.frame(x=as.vector(unlist(eff_x)),y=as.vector(unlist(eff_y)),vector="effects")#create contour_df
-  
-  mean_vecs_df <- mean_vecs_df[nrow(mean_vecs_df):1,]
-  bars_df <- bars_df[nrow(bars_df):1,]
-  
-  margin_factor <- -.039
-  #Make plot-specific adjustments
-  if (c == 1){
-    #jitter overlapping error bars
-    bars_df[1:3,c(1,3)] <- bars_df[1:3,c(1,3)] - jitter
-    bars_df[4:6,c(2,4)] <- bars_df[4:6,c(2,4)] - .0013
-    #set plot limits
-    x_start <- .5*margin_factor
-    x_end <- NA
-    y_start <- .85*margin_factor
-    y_end <- NA
-  } else if (c == 2){
-    mean_vecs_df <- filter(mean_vecs_df,vector != "resid") #residual shows on plot but should be 0
-    #set plot limits
-    x_start <- NA
-    x_end <- NA
-    y_start <- .85*margin_factor
-    y_end <- NA
-  } else if (c == 3){
-    #jitter overlapping error bars
-    bars_df[1:3,c(1,3)] <- bars_df[1:3,c(1,3)] - jitter
-    bars_df[4:6,c(1,3)] <- bars_df[4:6,c(1,3)] - jitter
-    bars_df[7:9,c(1,3)] <- bars_df[7:9,c(1,3)] + jitter
-    #set plot limits
-    x_start <- 1.2*margin_factor
-    x_end <- NA
-    y_start <- .6*margin_factor
-    y_end <- NA
-  } else if (c == 4){
-    bars_df[4:6,c(2,4)] <- bars_df[4:6,c(2,4)] + .0003
-    mean_vecs_df <- filter(mean_vecs_df,vector != "resid") #residual shows on plot but should be 0
-    #set plot limits
-    x_start <- -.06
-    x_end <- -.12*margin_factor
-    y_start <- NA
-    y_end <- -.04*margin_factor
-  }
-  
-  # create plot for contour, means, error bars
-  plot <- ggplot() +
-    geom_vline(aes(xintercept=0), color="black",size = .6) +
-    geom_hline(aes(yintercept=0), color="black",size = .6) +
-    geom_density_2d(data=contour_df,aes(x=x,y=y,color="#FAFAFA",alpha=..level..)) +
-    geom_segment(data = mean_vecs_df, aes(x = x, y = y, xend = xend, yend = yend, color = vector),
-                 arrow = arrow(type = "closed", length = unit(0.15, "inches")),size = 6.5) +
-    geom_segment(data = bars_df, aes(x = x, y = y, xend = xend, yend = yend, color = vector),
-                 size = 0.75) +
-    scale_color_manual(values=c("SV"="dark blue","PE"="dark green","CC"="#9B1010","resid"="gray","effects"="black",
-                                "SV_m"="#3368FF","PE_m"="#6fc276","CC_m"="#df4a34","resid_m"="gray","effects_m"="black")) +
-    theme(panel.background = element_rect(fill = "#F0F0F0"),
-          legend.position = "none",
-          axis.text = element_blank(),
-          axis.ticks = element_blank()) +
-    coord_cartesian(xlim=c(x_start, x_end),
-                    ylim=c(y_start, y_end)) +
-    labs(title = NULL, x = NULL, y = NULL)
-  
-  plot_list[[c]] <- plot
-}
-# Grid arrange and display
-
-grid_ob <- gridExtra::grid.arrange(grobs = plot_list, ncol = 2)
-ggsave("/Users/dp/projects/spring_2022_study/manuscript/figures/s2_estvec.png",grid_ob,width=12,height=12)
-
+ggsave("~/Documents/active_manuscripts/s22/figures/vec_sol_ch1_fu.pdf",vec_sol_ch1,width=2,height=2)
+ggsave("~/Documents/active_manuscripts/s22/figures/vec_sol_ch2_fu.pdf",vec_sol_ch2,width=2,height=2)
+ggsave("~/Documents/active_manuscripts/s22/figures/vec_sol_out1_fu.pdf",vec_sol_out1,width=2,height=2)
+ggsave("~/Documents/active_manuscripts/s22/figures/vec_sol_out2_fu.pdf",vec_sol_out2,width=2,height=2)
 ```
 
 # Do linear algebra analysis on model with raw Q values
@@ -791,8 +696,8 @@ csr_draws <- combined_shrink_rawQ_fit$draws(c("dpiw_mu","fpiw_mu")) #get draws a
 vec_ws_rq <- apply(csr_draws,c(1,2),vec_optim,dvec=dvec_mat) #get vector weights
 vec_ws_org_rq <- aperm(vec_ws_rq,c(2,3,1)) #rearrange to be in the same order that they were in the draws array
 dimnames(vec_ws_org_rq)[[3]] <- c("tde","q_ch","q_reg","pwrd","rpe","rew","out_reg") #name meaningfully
-save(vec_ws_org_rq,file=paste0(model_out_dir,"vec_ws_rq_s2.RData"))
-#load(paste0(model_out_dir,"vec_ws_s2.RData"))
+#save(vec_ws_org_rq,file=paste0(model_out_dir,"vec_ws_rq_s2.RData"))
+load(paste0(model_out_dir,"vec_ws_s2.RData"))
 ```
 
 
@@ -864,7 +769,14 @@ ratings_arl <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"ratings_a
                          raw_data = trials_frate,
                          study = "s22fu",
                          n_t=52,
-                         chains = 3)
+                         iter_sampling = 2000)
+
+ra_scd_draws <- get_draws("ratings_arl",model_out_dir=model_out_dir,vars=c("scd_beta_mu","scd_aff_sens_mu"))
+
+quantile(ra_scd_draws[,,"scd_beta_mu"],c(.05,.50,.95))
+mean(ra_scd_draws[,,"scd_beta_mu"] > 0)
+quantile(ra_scd_draws[,,"scd_aff_sens_mu"],c(.05,.50,.95))
+mean(ra_scd_draws[,,"scd_aff_sens_mu"] > 0)
 
 ra_asens_draws <- ratings_arl_fit$draws("aff_sens_mu")
 mcmc_areas(
@@ -916,3 +828,223 @@ mcmc_areas(
 ) +
   coord_cartesian(xlim=c(0,NA))
 ```
+
+# Compare reward and affect effects
+
+In ratings model
+```{r}
+ratings_arl_vars <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"ratings_arl_vars.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials_frate,
+                         study = "s22fu",
+                         n_t=52,
+                         chains = 3)
+```
+
+```{r}
+rav_draws <- get_draws("ratings_arl_vars",model_out_dir=model_out_dir,vars=c("cp_var_mu","cp_var_noA_mu","cp_var_noQ_mu","cp_var_noC_mu"))
+rav_draws_diff<- (rav_draws[,,"cp_var_mu"]-rav_draws[,,"cp_var_noQ_mu"]) - (rav_draws[,,"cp_var_mu"]-rav_draws[,,"cp_var_noA_mu"])
+quantile(rav_draws_diff,probs=c(.01,.025,.05,.5,.95,.975,.99))
+```
+
+In model-predicted valence model
+```{r}
+model_pred_arl_vars <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"model_pred_arl_vars.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         n_t=104,
+                         chains = 3)
+```
+
+```{r}
+mav_draws <- get_draws("model_pred_arl_vars",model_out_dir=model_out_dir,vars=c("cp_var_mu","cp_var_noA_mu","cp_var_noQ_mu","cp_var_noC_mu"))
+mav_draws_diff<- (mav_draws[,,"cp_var_mu"]-mav_draws[,,"cp_var_noQ_mu"]) - (mav_draws[,,"cp_var_mu"]-mav_draws[,,"cp_var_noA_mu"])
+quantile(mav_draws_diff,probs=c(.01,.025,.05,.5,.95,.975,.99))
+```
+
+Run model-predicted valence ARL with nuisance parameters not part of the prediction
+```{r}
+model_pred_arl_nonuis <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"model_pred_arl_nonuis.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         iter_sampling = 1500,
+                         n_t=104)
+```
+
+```{r}
+mpan_scds <- get_draws("model_pred_arl_nonuis",model_out_dir=model_out_dir,vars=c("scd_beta_mu","scd_aff_sens_mu"))
+quantile(mpan_scds[,,"scd_beta_mu"],c(.025,.5,.975))
+mean(mpan_scds[,,"scd_beta_mu"] > 0)
+quantile(mpan_scds[,,"scd_aff_sens_mu"],c(.025,.5,.975))
+mean(mpan_scds[,,"scd_aff_sens_mu"] > 0)
+quantile(mpan_scds[,,"scd_beta_mu"] - mpan_scds[,,"scd_aff_sens_mu"],c(.025,.5,.975))
+mean(mpan_scds[,,"scd_beta_mu"] > mpan_scds[,,"scd_aff_sens_mu"])
+
+```
+
+# Exploratory analyses
+
+```{r}
+breakdown_s2 <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"breakdown_s2.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials_frate,
+                         study = "s22fu",
+                         n_t=52,
+                         chains = 3)
+```
+
+```{r}
+breakdown_s2$diagnostics
+filt_sum(breakdown_s2$sum,"mu")
+filt_sum(breakdown_s2$sum,"sigma")
+```
+Affect sensitivity parameters are out of left field. Big SDs on mean estimates - plus big sigmas - suggests that we're just not powered to detect all of those effects. 
+
+
+Regressing valence and reward onto choice
+```{r}
+trials_frate_scale <- trials %>% filter(!is.na(feed_rate_z)) %>% mutate(feed_rate_z=scale(feed_rate_z),chosen_out=scale(chosen_out),out_diff=scale(chosen_out-unchosen_out))
+stay_fit <- lmer(stay ~ feed_rate_z + out_diff + (feed_rate_z + out_diff | sub_index),trials_frate_scale)
+stay_fit2 <- lmer(stay ~  chosen_out + (chosen_out | sub_index),trials_frate_scale)
+anova(stay_fit,stay_fit2)
+summary(stay_fit)
+summary(stay_fit2)
+```
+
+# Effects of affect variables on RL
+
+```{r}
+#get posteriors for affect regressors and affect sensitivity
+aff_posts <- get_draws("model_pred_arl_nonuis",model_out_dir,vars=c("fpiw_mu[1]","fpiw_mu[2]","fpiw_mu[3]","fpiw_mu[4]"))
+asens_post <- get_draws("model_pred_arl_nonuis",model_out_dir,vars=c("aff_sens_mu"))
+
+#multiply each coefficient posterior by affect sensitity to get affect-mediated RL influence
+aff_ch_list <- lapply(c(1:dim(aff_posts)[3]),function(dim) drop(aff_posts[,,dim])*drop(asens_post))
+aff_ch <- abind(aff_ch_list,along=3)
+
+#add the non-affect-mediated RL influence of reward to that posterior
+beta_post <- get_draws("model_pred_arl_nonuis",model_out_dir,vars=c("beta_mu")) 
+aff_ch[,,3] <- aff_ch[,,3] + drop(beta_post) #add to the reward posterior the effect of reward per se
+
+
+
+pwrd <- c(-.5,0,.5,0)
+rpe <- c(0,-.5,.5,0)
+rew <- c(0,0,1,0)
+out_reg <- c(0,0,.5,-.5)
+dvec_val_mat <- cbind(pwrd,rpe,rew,out_reg) #turn into matrix
+
+val_vec_ws <- apply(aff_ch,c(1,2),vec_optim,dvec=dvec_val_mat,init_pars=rep(0,4)) #get vector weights
+vv_ws_org <- aperm(val_vec_ws,c(2,3,1)) #rearrange dims to be in the same order that they were in the draws array
+dimnames(vv_ws_org)[[3]] <- c("pwrd","rpe","rew","out_reg") #name meaningfully
+```
+
+Get array of manhattan norm ratios
+```{r}
+#get array of manhattan norm ratios
+mn_data_vv <- apply(aff_ch,c(1,2),function(x) sum(abs(x))) #get the manhattan norms for each data vector by summing the absolute values
+
+comb_array_vv <- abind(vv_ws_org,mn_data_vv,along=3) #staple mn_data to the back of the third dimension of the vector weight array
+vv_ws_norm <- apply(comb_array_vv,c(1,2), get_ports) #get portions of relationship accounted for
+
+#have to rearrange and name again
+vv_ws_norm_org <- aperm(vv_ws_norm,c(2,3,1)) 
+dimnames(vv_ws_norm_org)[[3]] <- c("pwrd","rpe","rew","out_reg","resid") #name meaningfully
+
+#create interval plots
+create_interval_plot(arr = vv_ws_norm_org,names=c("pwrd","rpe","rew","out_reg","resid"),xmin = -.012,xmax = 1)
+```
+
+```{r}
+#save(vv_ws_norm_org,file=paste0(model_out_dir,"vv_ws_norm_org_s2.RData"))
+load(paste0(model_out_dir,"vv_ws_norm_org_s2.RData"))
+
+#get total theory weights
+sv_vv_ports <- vv_ws_norm_org[,,3] 
+reg_vv_ports <- vv_ws_norm_org[,,4] 
+
+pe_vv_ws <- vv_ws_norm_org[,,c(1,2)] 
+pe_vv_ports <- apply(pe_vv_ws,c(1,2),sum)
+
+thr_vv_ports <- array(c(sv_vv_ports,pe_vv_ports,reg_vv_ports,vv_ws_norm_org[,,5]),dim=c(1500,4,4))
+dimnames(thr_vv_ports)[[3]] <- c("sv","pe","cc","resid") #name meaningfully
+
+thr_vv_ports_s2 <- thr_vv_ports
+save(thr_vv_ports_s2,file=paste0(model_out_dir,"thr_vv_ports_s2.RData"))
+```
+
+```{r}
+theory_intervals_vv <- create_interval_plot(arr = thr_vv_ports,names = c("resid","cc","pe","sv"),
+                                          xmin = -.017,xmax = 1)
+theory_intervals_vv_s2 <- theory_intervals_vv
+save(theory_intervals_vv_s2,file="~/Documents/active_manuscripts/s22/figures/theory_intervals_vv_s2.RData")
+```
+
+make the above vectors into theory vectors
+```{r}
+#s1
+sv_ws <- vec_ws_norm_org[,,c(2,6)] 
+pe_ws <- vec_ws_norm_org[,,c(1,4,5)] 
+reg_ws <- vec_ws_norm_org[,,c(3,7)] 
+
+#sum them to get total theory weights
+sv_ports <- apply(sv_ws,c(1,2),sum) 
+pe_ports <- apply(pe_ws,c(1,2),sum)
+reg_ports <- apply(reg_ws,c(1,2),sum)
+
+thr_ports <- array(c(sv_ports,pe_ports,reg_ports,vec_ws_norm_org[,,8]),dim=c(1000,4,4))
+dimnames(thr_ports)[[3]] <- c("sv","pe","cc","resid") #name meaningfully
+```
+
+Get stats for theory vectors
+```{r}
+quantile(thr_ports[,,"sv"],c(.50,.025,.975))
+round(mean(thr_ports[,,"sv"] > 0) * 100,1)
+
+quantile(thr_ports[,,"pe"],c(.50,.025,.975))
+round(mean(thr_ports[,,"pe"] > 0) * 100,1)
+
+quantile(thr_ports[,,"cc"],c(.50,.025,.975))
+round(mean(thr_ports[,,"cc"] > 0) * 100,1)
+```
+
+
+```{r}
+rl_var_free_s2 <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"rl_var_free_s2.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         n_t=104)
+```
+
+#Theory predictions only ARL
+```{r}
+arl_theor_pred_s2 <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"arl_theor_pred_s2.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         n_t=104)
+```
+
+```{r}
+atps2_scds <- get_draws("arl_theor_pred_s2",model_out_dir=model_out_dir,vars=c("scd_beta_mu","scd_aff_sens_mu"))
+quantile(atps2_scds[,,"scd_beta_mu"],c(.025,.5,.975))
+mean(atps2_scds[,,"scd_beta_mu"] > 0)
+quantile(atps2_scds[,,"scd_aff_sens_mu"],c(.025,.5,.975))
+mean(atps2_scds[,,"scd_aff_sens_mu"] > 0)
+
+```
+
+#Utility vs. reinforcement test
+
+```{r}
+model_pred_arl_nonuis_pe <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"model_pred_arl_nonuis_pe.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         iter_sampling = 1500,
+                         n_t=104)
+```
+

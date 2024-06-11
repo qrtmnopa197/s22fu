@@ -43,12 +43,20 @@ parameters {
 
 transformed parameters {
   vector[n_s*n_t] log_lik;
+  real Q_sd;
+  real A_sd;
+  real C_sd;
   {//anonymous_scope_start
     array[n_s,n_t] vector[n_f] Q; // The Q values. These are a 2d array containing vectors: the first dimension is
                                   // the subject, the second dimension is the trial, and for each trial there's a
                                   // vector with a Q value for each fractal
     array[n_s,n_t] vector[n_f] A; // Expected affective valence, with the same structure as Q
     array[n_s,n_t] vector[n_f] C; // Choice autocorrelation value, of the same structure as Q
+    
+    //differences between Q, A, and C values of fractal A and fractal B
+    matrix[n_s,n_t] Q_diff;
+    matrix[n_s,n_t] A_diff;
+    matrix[n_s,n_t] C_diff;
     
     array[n_s] vector[n_t] PE_a;  // The RPEs to outcome a. This is a 1d array containing one vector per subject,
                                   // where that vector contains one value per trial
@@ -76,6 +84,11 @@ transformed parameters {
         // get the likelihood of the choice made on this trial
         log_lik[(s-1)*n_t+t] = categorical_logit_lpmf(choice[s,t] | [beta[s]*Q[s,t,fA[s,t]] + aff_sens[s]*A[s,t,fA[s,t]] + phi[s]*C[s,t,fA[s,t]],
                                                                      beta[s]*Q[s,t,fB[s,t]] + aff_sens[s]*A[s,t,fB[s,t]] + phi[s]*C[s,t,fB[s,t]]]'); 
+        
+        //get differences on this trial
+        Q_diff[s,t] = Q[s,t,fA[s,t]] - Q[s,t,fB[s,t]];
+        A_diff[s,t] = A[s,t,fA[s,t]] - A[s,t,fB[s,t]];
+        C_diff[s,t] = C[s,t,fA[s,t]] - C[s,t,fB[s,t]];
                                                                      
         PE_a[s,t] = out_a[s,t] - Q[s,t,fA[s,t]]; // get the PE to fractal A on this trial
         PE_b[s,t] = out_b[s,t] - Q[s,t,fB[s,t]]; // get the PE to fractal B on this trial
@@ -107,6 +120,9 @@ transformed parameters {
         }
       }
     }
+    Q_sd = sd(Q_diff);
+    A_sd = sd(A_diff);
+    C_sd = sd(C_diff);
   }//anonymous_scope_end
 }
 
@@ -138,4 +154,10 @@ model {
   // Add the joint likelihood to the target density, mapping beta-adjusted Q values to choice probabilities
   // using a softmax function. Unfortunately, categorical_logit does not support vectorization. 
   target += log_lik;
+}
+
+generated quantities{
+  real scd_beta_mu = Q_sd*beta_mu;
+  real scd_aff_sens_mu = A_sd*aff_sens_mu;
+  real scd_phi_mu = C_sd*phi_mu;
 }
