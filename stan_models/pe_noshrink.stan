@@ -273,7 +273,6 @@ model {
 
 generated quantities{
   vector[n_dp+n_fp] affect_lik; //log likelihoods of all affect rating
-  vector[n_s*n_t+n_dp+n_fp] log_lik; //log likelihoods of all choices followed by log likelihoods of all affect ratings
   {//anonymous scope start
     vector[n_dp] dec_lik; //log liks of post-dec ratings
     vector[n_fp] feed_lik; //ditto post-feed
@@ -286,8 +285,6 @@ generated quantities{
     }
     
     affect_lik = append_row(dec_lik,feed_lik);
-    
-    log_lik = append_row(choice_lik,affect_lik);
   }//anonymous scope end
 }
 

@@ -30,6 +30,7 @@ library(GGally)
 library(bayesplot)
 library(sigmoid)
 library(abind)
+library(lmerTest)
 
 source(paste0(path_to_project_directory,"code/functions/s22fu_utilities.R"))
 source(paste0(path_to_s22,"code/functions/s22_utilities.R"))
@@ -251,11 +252,6 @@ pe_noshrink <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"pe_noshri
                                     model_out_dir = model_out_dir,
                                     raw_data = trials,
                                     study = "s22fu",
-                                    iter_warmup = 4000,
-                                    iter_sampling = 4000,
-                                    adapt_delta = .95,
-                                    max_treedepth = 12,
-                                    skip=c("waic","check_csvs"),
                                     n_t=104)
 ```
 
@@ -300,7 +296,7 @@ fsml_compare(pe_noshrink,null_affect)
 
 Comparing each theory-specific model to the combined model.
 ```{r}
-fsml_compare(combined_noshrink,pe_noshrink,regret_noshrink,simp_val_noshrink)
+fsml_compare(combined_noshrink,pe_noshrink,regret_noshrink,simp_val_noshrink,null_affect)
 ```
 
 ## Posterior effect estimates
@@ -330,19 +326,6 @@ feed_rsq <- mcmc_rsq(combined_shrink$fit,"feed_pred","f_resid",print_plot=FALSE)
 feed_rsq$sum
 ```
 
-Now, examining 90% credible intervals for the effects
-```{r}
-cs_mudraws <- get_draws_df(combined_shrink$mod,combined_shrink$fit,vars=c("dpiw_mu[1]","dpiw_mu[2]","dpiw_mu[3]","fpiw_mu[1]","fpiw_mu[2]","fpiw_mu[3]","fpiw_mu[4]"))
-cs_mudraws_origform <- cs_mudraws %>% transmute(choice_TDE = -`dpiw_mu[1]`, Q_ch = `dpiw_mu[1]` + `dpiw_mu[2]` + `dpiw_mu[3]`, Q_regret=`dpiw_mu[3]`, 
-                                                      PWRD = -`fpiw_mu[1]`,RPE = -`fpiw_mu[2]`,reward = `fpiw_mu[1]` + `fpiw_mu[2]` + `fpiw_mu[3]` + `fpiw_mu[4]`, regret = `fpiw_mu[4]`)
-mcmc_areas(
-  cs_mudraws_origform,
-  area_method = "scaled height",
-  prob = 0.5, # 80% intervals
-  prob_outer = 0.9, # 99%
-  point_est = "mean"
-)
-```
 Because two of the prediction error effects are in the wrong direction, it raises the question of whether the combined model still fits better without these prediction-inconsistent effects.
 Refitting the model with no effects of TDE or RPE.
 ```{r}
@@ -489,12 +472,54 @@ raw_eff_intervals<- create_interval_plot(arr = cs_draws,names = c("fpiw_mu[4]","
                                                            "dpiw_mu[1]_med" = "black","dpiw_mu[2]_med" = "black","dpiw_mu[3]_med" = "black"),
                                           xmin = -.2,xmax = .85,
                                           percentiles = c(0.025,.25,.50,.75,.975),
-                                          dot_size = 3)
+                                          dot_size = 3) +
+                   theme(panel.grid.major.x = element_line(color = "#DCDCDC", size = .47),
+                         panel.background = element_rect(fill = "white", color = NA))
 raw_eff_intervals_s2 <- raw_eff_intervals
-save(raw_eff_intervals_s2,file="~/Documents/active_manuscript/manuscript/figures/raw_eff_intervals_s2.RData")
+save(raw_eff_intervals_s2,file="~/Documents/active_manuscripts/s22/figures/raw_eff_intervals_s2.RData")
+```
+```{r}
+#recode this draws array to match the preregistered formulation of the model
+cs_draws_prereg <- array(NA, dim = c(1000, 4, 7))
+dimnames(cs_draws_prereg) <- list(NULL, NULL, c("SV_ch", "PE_ch", "CC_ch", "SV_out", "PE_outV", "PE_outQ", "CC_out"))
+cs_draws_prereg[,,"SV_ch"] <- cs_draws[,,"dpiw_mu[1]"] + cs_draws[,,"dpiw_mu[2]"] + cs_draws[,,"dpiw_mu[3]"]
+cs_draws_prereg[,,"PE_ch"] <- -cs_draws[,,"dpiw_mu[1]"]
+cs_draws_prereg[,,"CC_ch"] <- -cs_draws[,,"dpiw_mu[3]"]
+cs_draws_prereg[,,"SV_out"] <- cs_draws[,,"fpiw_mu[1]"] + cs_draws[,,"fpiw_mu[2]"] + cs_draws[,,"fpiw_mu[3]"] + cs_draws[,,"fpiw_mu[4]"]
+cs_draws_prereg[,,"PE_outV"] <- -cs_draws[,,"fpiw_mu[1]"]
+cs_draws_prereg[,,"PE_outQ"] <- -cs_draws[,,"fpiw_mu[2]"]
+cs_draws_prereg[,,"CC_out"] <- -cs_draws[,,"fpiw_mu[4]"]
+
+raw_eff_intervals_prereg <- create_interval_plot(arr = cs_draws_prereg,names = c("CC_out","PE_outQ","PE_outV","SV_out","CC_ch","PE_ch","SV_ch"),
+                                          color_mapping = c("SV_ch" = "#5C9ED6","PE_ch" = "#8B5FBF","CC_ch"="#D9534F",
+                                           "SV_ch_med" = "#39658D", "PE_ch_med" = "#4C2F79", "CC_ch_med" = "#8C2829",
+                                           "SV_out" = "#5C9ED6","PE_outQ" = "#8B5FBF","PE_outV" = "#8B5FBF","CC_out"="#D9534F",
+                                           "SV_out_med" = "#39658D", "PE_outQ_med" = "#4C2F79","PE_outV_med" = "#4C2F79", "CC_out_med" = "#8C2829"),
+                                          xmin = -.2,xmax = .9,
+                                          percentiles = c(0.025,.25,.50,.75,.975),
+                                          dot_size = 3) +
+                   theme(panel.grid.major.x = element_line(color = "#DCDCDC", size = .47),
+                         panel.background = element_rect(fill = "white", color = NA),
+                         axis.text.x = element_blank(),
+                         axis.text.y=element_blank())
+ggsave("~/Documents/active_manuscripts/s22/figures/raw_eff_intervals_prereg.pdf",raw_eff_intervals_prereg,width=1.8,height=1.35)
 ```
 
+```{r}
+quantile(cs_draws_prereg[,,"SV_ch"],c(.025,.50,.975))
+mean(cs_draws_prereg[,,"SV_ch"] > 0)
 
+quantile(cs_draws_prereg[,,"SV_out"],c(.025,.50,.975))
+mean(cs_draws_prereg[,,"SV_out"] > 0)
+
+quantile(cs_draws_prereg[,,"PE_outV"],c(.025,.50,.975))
+mean(cs_draws_prereg[,,"PE_outV"] > 0)
+
+quantile(cs_draws_prereg[,,"CC_out"],c(.025,.50,.975))
+mean(cs_draws_prereg[,,"CC_out"] > 0)
+```
+
+                                                          
 ```{r}
 #plot normed weights
 mn_data <- apply(cs_draws,c(1,2),function(x) sum(abs(x))) #get the manhattan norms for each data vector by summing the absolute values
@@ -773,30 +798,10 @@ ratings_arl <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"ratings_a
 
 ra_scd_draws <- get_draws("ratings_arl",model_out_dir=model_out_dir,vars=c("scd_beta_mu","scd_aff_sens_mu"))
 
-quantile(ra_scd_draws[,,"scd_beta_mu"],c(.05,.50,.95))
+quantile(ra_scd_draws[,,"scd_beta_mu"],c(.025,.50,.975))
 mean(ra_scd_draws[,,"scd_beta_mu"] > 0)
-quantile(ra_scd_draws[,,"scd_aff_sens_mu"],c(.05,.50,.95))
+quantile(ra_scd_draws[,,"scd_aff_sens_mu"],c(.025,.50,.975))
 mean(ra_scd_draws[,,"scd_aff_sens_mu"] > 0)
-
-ra_asens_draws <- ratings_arl_fit$draws("aff_sens_mu")
-mcmc_areas(
-  ra_asens_draws,
-  area_method = "scaled height",
-  prob = 0.9,
-  prob_outer = 0.99,
-  point_est = "median"
-) +
-  coord_cartesian(xlim=c(0,NA))
-
-ra_beta_draws <- ratings_arl_fit$draws("beta_mu")
-mcmc_areas(
-  ra_beta_draws,
-  area_method = "scaled height",
-  prob = 0.9,
-  prob_outer = 0.99,
-  point_est = "median"
-) +
-  coord_cartesian(xlim=c(0,NA))
 ```
 
 Next, to model-predicted valence ratings (at feedback)
@@ -905,12 +910,10 @@ Affect sensitivity parameters are out of left field. Big SDs on mean estimates -
 
 Regressing valence and reward onto choice
 ```{r}
-trials_frate_scale <- trials %>% filter(!is.na(feed_rate_z)) %>% mutate(feed_rate_z=scale(feed_rate_z),chosen_out=scale(chosen_out),out_diff=scale(chosen_out-unchosen_out))
-stay_fit <- lmer(stay ~ feed_rate_z + out_diff + (feed_rate_z + out_diff | sub_index),trials_frate_scale)
-stay_fit2 <- lmer(stay ~  chosen_out + (chosen_out | sub_index),trials_frate_scale)
-anova(stay_fit,stay_fit2)
+trials_frate_scale <- trials %>% filter(!is.na(feed_rate_z)) %>% mutate(feed_rate_z=scale(feed_rate_z),chosen_out=scale(chosen_out),unchosen_out=scale(unchosen_out))
+stay_fit <- lmer(stay ~ feed_rate_z + chosen_out + unchosen_out + (feed_rate_z + chosen_out + unchosen_out | sub_index),trials_frate_scale)
 summary(stay_fit)
-summary(stay_fit2)
+confint(stay_fit, parm = c("feed_rate_z","chosen_out"))
 ```
 
 # Effects of affect variables on RL
@@ -1025,7 +1028,11 @@ arl_theor_pred_s2 <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"arl
                          model_out_dir = model_out_dir,
                          raw_data = trials,
                          study = "s22fu",
+                         adapt_delta = .95,
+                         max_treedepth = 12,
+                         iter_sampling = 1500,
                          n_t=104)
+                                         
 ```
 
 ```{r}
@@ -1046,5 +1053,33 @@ model_pred_arl_nonuis_pe <- fit_stan_model(stan_file = paste0(stan_model_dir_s22
                          study = "s22fu",
                          iter_sampling = 1500,
                          n_t=104)
+```
+
+# Does a model that assumes exponentially decaying effects fit better?
+```{r}
+fsml_compare(combined_shrink_exdec,combined_shrink)
+```
+
+# Get parameter estimates from final model not reported in the main article
+```{r}
+unreported_params <- "phi_mu|base_mu|blk_num_mu|dec_mu|tr_mu|pr_mu|alpha_mu|tau_mu|forget_mu"
+up_tab <- select(filt_sum(model_pred_arl_nonuis$sum,unreported_params),variable,median,q5,q95)
+up_tab[2,3,4] <- as.numeric(up_tab[2,3,4])
+```
+
+```{r}
+#replace the choice predictors with scaled effects
+scd_csens_mu <- get_draws("model_pred_arl_nonuis",vars=c("scd_phi_mu"),model_out_dir=model_out_dir)
+up_tab[2,2:4] <- t(quantile(scd_csens_mu,c(.50,.05,.95)))
+```
+
+```{r}
+#sigmoid-transform the learning rates
+up_tab[c(1,3,4),2:4] <- sigmoid(up_tab[c(1,3,4),2:4])
+```
+
+```{r}
+up_tab[,c("median","q5","q95")] <- round(up_tab[,c("median","q5","q95")],2)
+write.csv(up_tab,"~/Desktop/temp.csv")
 ```
 
