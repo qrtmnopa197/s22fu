@@ -1041,7 +1041,6 @@ quantile(atps2_scds[,,"scd_beta_mu"],c(.025,.5,.975))
 mean(atps2_scds[,,"scd_beta_mu"] > 0)
 quantile(atps2_scds[,,"scd_aff_sens_mu"],c(.025,.5,.975))
 mean(atps2_scds[,,"scd_aff_sens_mu"] > 0)
-
 ```
 
 #Utility vs. reinforcement test
@@ -1053,8 +1052,81 @@ model_pred_arl_nonuis_pe <- fit_stan_model(stan_file = paste0(stan_model_dir_s22
                          study = "s22fu",
                          iter_sampling = 1500,
                          n_t=104)
+model_pred_arl_nonuis_pe <- read_fsml("model_pred_arl_nonuis_pe",model_out_dir=model_out_dir)
 ```
 
+```{r}
+fsml_compare(model_pred_arl_nonuis_pe,model_pred_arl_nonuis)
+```
+Something went very wrong with the model_pred_arl_nonuis_pe fit. Checking if it was a mistake in the code, or if it's the update itself, by rerunning it with the update switched back to a utility-based formulation.
+
+```{r}
+mpan_sw_pe <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"mpan_sw_pe.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         iter_sampling = 1500,
+                         n_t=104)
+```
+
+This runs fine, so it was the fact that PEs were used for the update. It looks like the third chain was particularly
+problematic. So let's rerun loo with only chains 1, 2, and 4, and see if the k values are better and the comparison
+is more reasonable.
+
+
+```{r}
+mpan_124_loo <- get_loo_from_csvs(files=c("/Users/dp/projects/s22_follow_up/output/results/stan_model_fits/model_pred_arl_nonuis/model_pred_arl_nonuis-202312281608-1-1c8417.csv","/Users/dp/projects/s22_follow_up/output/results/stan_model_fits/model_pred_arl_nonuis/model_pred_arl_nonuis-202312281608-2-1c8417.csv","/Users/dp/projects/s22_follow_up/output/results/stan_model_fits/model_pred_arl_nonuis/model_pred_arl_nonuis-202312281608-4-1c8417.csv"),variables=c("choice_lik","affect_lik"))
+mpan_pe_124_loo <- get_loo_from_csvs(files=c("/Users/dp/projects/s22_follow_up/output/results/stan_model_fits/model_pred_arl_nonuis_pe/model_pred_arl_nonuis_pe-202405201910-1-0c3a4d.csv","/Users/dp/projects/s22_follow_up/output/results/stan_model_fits/model_pred_arl_nonuis_pe/model_pred_arl_nonuis_pe-202405201910-2-0c3a4d.csv","/Users/dp/projects/s22_follow_up/output/results/stan_model_fits/model_pred_arl_nonuis_pe/model_pred_arl_nonuis_pe-202405201910-4-0c3a4d.csv"),variables=c("choice_lik","affect_lik"))
+
+mpan_pe_124_loo
+loo_compare(mpan_124_loo,mpan_pe_124_loo)
+```
+Yep, things are normal again when the third chain is deleted. And the utility model fits better by 3.4 SEs.
+
+Now, do a model comparison using raw ratings rather than model-predicted affect
+```{r}
+trials_frate <- trials %>% filter(block_feedrate == 1) #get only trials from feedback rating blocks
+
+ratings_arl_pe <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"ratings_arl_pe.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials_frate,
+                         study = "s22fu",
+                         n_t=52,
+                         iter_sampling = 2000)
+```
+
+```{r}
+fsml_compare(ratings_arl_pe,ratings_arl)
+```
+
+Redo the comparison with no Q values
+```{r}
+ratings_arl_noQ_pe <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"ratings_arl_noQ_pe.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials_frate,
+                         study = "s22fu",
+                         n_t=52,
+                         chains = 3)
+```
+
+```{r}
+ratings_arl_noQ <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"ratings_arl_noQ.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials_frate,
+                         study = "s22fu",
+                         n_t=52,
+                         chains = 3)
+```
+
+```{r}
+fsml_compare(ratings_arl_noQ,ratings_arl_noQ_pe)
+```
+```{r}
+filt_sum(ratings_arl_noQ$sum,"mu")
+```
+
+Fits much better.
+ 
 # Does a model that assumes exponentially decaying effects fit better?
 ```{r}
 fsml_compare(combined_shrink_exdec,combined_shrink)
