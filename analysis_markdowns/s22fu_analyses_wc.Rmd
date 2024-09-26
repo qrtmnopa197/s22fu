@@ -1167,3 +1167,72 @@ up_tab[,c("median","q5","q95")] <- round(up_tab[,c("median","q5","q95")],2)
 write.csv(up_tab,"~/Desktop/temp.csv")
 ```
 
+# Testing for spurious positive effects of reward associations
+Here, we consider whether the observed effect of reward associations on choice could be due to its collinearity
+with affect assocations.
+
+First, we fit a model and simulate data in which only affect associations influence choice
+```{r}
+aff_only_s2 <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"aff_only_s2.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         iter_warmup = 10,
+                         iter_sampling = 10,
+                         n_t=104)
+aff_only_s2 <- read_fsml("aff_only_s2",model_out_dir=model_out_dir)
+```
+
+
+For each simulated dataset, we estimate the effects of Q and A on choice, using an analysis method that 
+efficiently approximates the model reported in the manuscript
+```{r}
+# Get necessary data
+trials_bqba_sim <- trials %>% select(sub_index,block,fA_ix,fB_ix,feed_probe_number,out_a,out_b)
+
+# Add parameter means needed for approximate data analysis
+trials_bqba_sim <- add_param_means(aff_only_s2$sum,"alpha",trials_bqba_sim)
+trials_bqba_sim <- add_param_means(aff_only_s2$sum,"forget",trials_bqba_sim)
+trials_bqba_sim <- add_param_means(aff_only_s2$sum,"tau",trials_bqba_sim)
+
+# Get simulated data
+sim_choice <- get_draws(model="aff_only_s2",vars=c("sim_choice"),model_out_dir=model_out_dir)
+sim_feed_rat <- get_draws("aff_only_s2",vars=c("sim_feed_rat"),model_out_dir=model_out_dir)
+sim_prat <- get_draws("aff_only_s2",vars=c("sim_prat"),model_out_dir=model_out_dir)
+
+plan(multisession, workers = 12)
+registerDoFuture()
+
+sim_effs <- data.frame("bQs"=c(),"bAs"=c())
+for(chunk in 1:8){
+  # Divide the simulations into 8 chunks, to avoid overtaxing memory
+  iters <- ((chunk-1)*125+1):(chunk*125)
+  sim_choice_chunk <- sim_choice[iters,,]
+  sim_prat_chunk <- sim_prat[iters,,]
+  sim_feed_rat_chunk <- sim_feed_rat[iters,,]
+  chunk_effs <- foreach(i = 1:125, .combine = rbind) %dopar% {
+    iter_effs <- data.frame(matrix(0,ncol=2,nrow=4))
+    colnames(iter_effs) <- c("bQs","bAs")
+    for(c in 1:4){
+      # Add simulated choices and ratings to the data
+      sim_trials <- trials_bqba_sim %>% 
+                      mutate(choice=as.vector(sim_choice_chunk[i,c,])) %>%
+                      mutate(prat=as.vector(sim_prat_chunk[i,c,])) %>%
+                      left_join(data.frame(feed_rate_z = as.vector(sim_feed_rat_chunk[i,c,]),
+                                           feed_probe_number = 1:dim(sim_feed_rat_chunk)[3]),
+                                by="feed_probe_number") %>%
+                      mutate(chosen_frac = ifelse(choice == 1,fA_ix,fB_ix)) %>%
+                      mutate(unchosen_frac = ifelse(choice == 1,fB_ix,fA_ix))
+      # Get estimated effects of Q and A on choice
+      est_eff <- est_bq_ba_s2(sim_trials)
+      iter_effs$bQs[c] <- est_eff$bQ
+      iter_effs$bAs[c] <- est_eff$bA
+    }
+    return(iter_effs)
+  }
+  sim_effs <- rbind(sim_effs,chunk_effs)
+}
+```
+
+
+
