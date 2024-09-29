@@ -17,6 +17,7 @@ options(mc.cores=12)
 ##SET MANUALLY
 path_to_project_directory <- "~/projects/s22_follow_up/"
 path_to_s22 <- "~/projects/spring_2022_study/"
+path_to_bv <- "~/projects/ARL_BV/"
 ##############
 stan_model_dir_s22fu <- paste0(path_to_project_directory,"code/stan_models/")
 stan_model_dir_s22 <- paste0(path_to_s22,"code/stan_models/final_models/")
@@ -31,9 +32,13 @@ library(bayesplot)
 library(sigmoid)
 library(abind)
 library(lmerTest)
+library(future)
+library(doFuture)
+library(foreach)
 
 source(paste0(path_to_project_directory,"code/functions/s22fu_utilities.R"))
 source(paste0(path_to_s22,"code/functions/s22_utilities.R"))
+source(paste0(path_to_bv,"code/functions/arlbv_utilities.R"))
 source(paste0(path_to_s22,"code/functions/stan_utilities.R"))
 source(paste0(path_to_s22,"code/functions/fit_stan_model.R"))
 
@@ -1188,7 +1193,7 @@ For each simulated dataset, we estimate the effects of Q and A on choice, using 
 efficiently approximates the model reported in the manuscript
 ```{r}
 # Get necessary data
-trials_bqba_sim <- trials %>% select(sub_index,block,fA_ix,fB_ix,feed_probe_number,out_a,out_b)
+trials_bqba_sim <- trials %>% select(sub_index,block,trial_nl,fA_ix,fB_ix,feed_probe_number,out_a,out_b)
 
 # Add parameter means needed for approximate data analysis
 trials_bqba_sim <- add_param_means(aff_only_s2$sum,"alpha",trials_bqba_sim)
@@ -1200,7 +1205,7 @@ sim_choice <- get_draws(model="aff_only_s2",vars=c("sim_choice"),model_out_dir=m
 sim_feed_rat <- get_draws("aff_only_s2",vars=c("sim_feed_rat"),model_out_dir=model_out_dir)
 sim_prat <- get_draws("aff_only_s2",vars=c("sim_prat"),model_out_dir=model_out_dir)
 
-plan(multisession, workers = 12)
+plan(multisession, workers = 8)
 registerDoFuture()
 
 sim_effs <- data.frame("bQs"=c(),"bAs"=c())
@@ -1222,7 +1227,9 @@ for(chunk in 1:8){
                                            feed_probe_number = 1:dim(sim_feed_rat_chunk)[3]),
                                 by="feed_probe_number") %>%
                       mutate(chosen_frac = ifelse(choice == 1,fA_ix,fB_ix)) %>%
-                      mutate(unchosen_frac = ifelse(choice == 1,fB_ix,fA_ix))
+                      mutate(unchosen_frac = ifelse(choice == 1,fB_ix,fA_ix)) %>%
+                      mutate(chosen_out = ifelse(choice == 1,out_a,out_b)) %>%
+                      mutate(unchosen_out = ifelse(choice == 1,out_b,out_a))
       # Get estimated effects of Q and A on choice
       est_eff <- est_bq_ba_s2(sim_trials)
       iter_effs$bQs[c] <- est_eff$bQ
@@ -1232,7 +1239,32 @@ for(chunk in 1:8){
   }
   sim_effs <- rbind(sim_effs,chunk_effs)
 }
+save(sim_effs,file=paste0(path_to_project_directory,"output/s2_aff_only_sim_effs.Rdata"))
 ```
 
+Next, we run these same approximate analyses on the real data
+```{r}
+# Get necessary data
+trials_bqba_real <- trials %>% select(sub_index,block,trial_nl,fA_ix,fB_ix,feed_probe_number,out_a,out_b,
+                                      choice_numeric,prev_rate,feed_rate_z,chosen_frac,unchosen_frac,
+                                      chosen_out,unchosen_out) %>%
+                               rename(prat = prev_rate, choice = choice_numeric)
+                               
 
+model_pred_arl_nonuis <- read_fsml("model_pred_arl_nonuis",model_out_dir=model_out_dir)
+# Add parameter means needed for approximate data analysis
+trials_bqba_real <- add_param_means(model_pred_arl_nonuis$sum,"alpha",trials_bqba_real)
+trials_bqba_real <- add_param_means(model_pred_arl_nonuis$sum,"tau",trials_bqba_real)
+trials_bqba_real <- add_param_means(model_pred_arl_nonuis$sum,"forget",trials_bqba_real)
 
+real_effs <- est_bq_ba_s2(trials_bqba_real)
+save(real_effs,file=paste0(path_to_project_directory,"output/s2_aff_only_real_effs.Rdata"))
+```
+
+Finally, we plot the simulated and actual effects for comparison
+```{r}
+ggplot(sim_effs, aes(x = bQs)) +
+  geom_histogram(fill = "steelblue", color = "black") +  # Adjust binwidth as needed
+  geom_vline(xintercept = 0, color = "black", linewidth = 1) +  # Black vertical line at 0
+  geom_vline(xintercept = real_effs$bQ, color = "red", linewidth = 1)
+```

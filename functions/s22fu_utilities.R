@@ -1,3 +1,54 @@
+# Estimates effects of Q and A on choice using an approximate data analysis method
+est_bq_ba_s2 <- function(data){
+  # Get Q values
+  data_list <- by(data, data$sub_index, add_assoc, cue_cols = c("fA_ix","fB_ix"), out_cols = c("out_a","out_b"), 
+                  num_assoc = 8, assoc_name = "q", lrn_rate = "alpha", for_rate = "forget")
+  data <- do.call(rbind,data_list)
+  
+  for(r in 1:nrow(data)){
+    # Get chosen Q value
+    data$q_ch[r] <- data[r,paste0("q_",data$chosen_frac[r])]
+  }
+  
+  # Estimate affect on each trial
+  val_fit <- lm(feed_rate_z ~ chosen_out + unchosen_out + q_ch + prat + block + trial_nl, data)
+  data <- data %>% mutate(mod_val = val_fit$coefficients[1] + val_fit$coefficients[2]*chosen_out +
+                                    val_fit$coefficients[3]*unchosen_out + val_fit$coefficients[4]*q_ch)
+  
+  # Get remaining associations used to predict choice
+  data <- data %>%
+    mutate(fA_chosen=ifelse(choice==1,1,0)) %>%
+    mutate(fB_chosen=ifelse(choice==2,1,0))
+  
+  data <- data %>%
+    split(data$sub_index) %>%
+    lapply(add_assoc, cue_cols = "chosen_frac", out_cols = "mod_val",
+           num_assoc = 8, assoc_name = "a", lrn_rate = "alpha", for_rate = "forget") %>%
+    lapply(add_assoc, cue_cols = c("fA_ix","fB_ix"), out_cols = c("fA_chosen","fB_chosen"),
+           num_assoc = 8, assoc_name = "c", lrn_rate = "tau") %>%
+    bind_rows()
+  
+  # Get choice predictor differences
+  for(r in 1:nrow(data)){
+    data[r,"c_A"] <- data[r,paste0("c_",data[r,"fA_ix"])]
+    data[r,"c_B"] <- data[r,paste0("c_",data[r,"fB_ix"])]
+    data[r,"q_A"] <- data[r,paste0("q_",data[r,"fA_ix"])]
+    data[r,"q_B"] <- data[r,paste0("q_",data[r,"fB_ix"])]
+    data[r,"a_A"] <- data[r,paste0("a_",data[r,"fA_ix"])]
+    data[r,"a_B"] <- data[r,paste0("a_",data[r,"fB_ix"])]
+  }
+  data <- data %>%
+    mutate(c_diff = c_A - c_B) %>%
+    mutate(q_diff = q_A - q_B) %>%
+    mutate(a_diff = a_A - a_B)
+  
+  # Estimate standardized effects on choice
+  choice_fit <- glm(fA_chosen ~ scale(q_diff) + scale(a_diff) + scale(c_diff),
+                    data, family = "binomial")
+  
+  list("bQ"=choice_fit$coefficients[2],"bA"=choice_fit$coefficients[3])
+}
+
 #Returns a list of data for input to stan, given trial-level data
 #trials: trial-level data
 #n_t: number of trials; must be set manually
