@@ -49,6 +49,23 @@ est_bq_ba_s2 <- function(data){
   list("bQ"=choice_fit$coefficients[2],"bA"=choice_fit$coefficients[3])
 }
 
+#Adds columns to a trials df corresponding to the fractals at play in the current block. 
+#df: a data frame with a specific block's trials
+create_pair_cols_s2 <- function(df){
+  unique_pairs <- df[!duplicated(df$fA_ix), ] #get the first 2 rows with unique pairs
+  #add columns to the df with these unique pairs
+  df_ret <- df %>% mutate(fA1 = unique_pairs$fA_ix[1],fB1 = unique_pairs$fB_ix[1],
+                          fA2 = unique_pairs$fA_ix[2],fB2 = unique_pairs$fB_ix[2])
+  return(df_ret)
+}
+
+#A wrapper functino that runs create_pair_cols on each of the blocks for a particular subject and stitches them together.
+create_pair_cols_sub_s2 <- function(df){
+  new_df_list <- by(df,df$block,create_pair_cols_s2)
+  df_ret <- do.call(rbind,new_df_list)
+  return(df_ret)
+}
+
 #Returns a list of data for input to stan, given trial-level data
 #trials: trial-level data
 #n_t: number of trials; must be set manually
@@ -107,6 +124,18 @@ stan_data_s22fu <- function(trials,n_t){
   #delete the below if not doing ARL analyses
   trials <- trials %>% mutate(feed_rate_0 = ifelse(is.na(feed_rate_z),0,feed_rate_z)) #create column that is feed_rate_z with NA replaced by 0
   feed_rate_0 <- sub_by_trial_vec_list(trials,"feed_rate_0")
+
+  pairs <- array(dim = c(n_s,n_t,2,2)) #declare the array of fractal pair indices
+  for(s in 1:n_s){
+    df <- trials %>% filter(sub_index == s) #grab the trials for this subject
+    for(t in 1:n_t){
+      #fill out the array for this subject and trial
+      pairs[s,t,1,1] <- df$fA1[t]
+      pairs[s,t,1,2] <- df$fB1[t]
+      pairs[s,t,2,1] <- df$fA2[t]
+      pairs[s,t,2,2] <- df$fB2[t]
+    }
+  }
   
   data <- list(
     n_t = n_t,
@@ -133,7 +162,8 @@ stan_data_s22fu <- function(trials,n_t){
     block_c = block_c,
     tinb_c = tinb_c,
     prev_rate = prev_rate,
-    feed_rate_0 = feed_rate_0
+    feed_rate_0 = feed_rate_0,
+    pairs = pairs
   )
   return(data)
 }

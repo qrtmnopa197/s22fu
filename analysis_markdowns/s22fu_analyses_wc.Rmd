@@ -23,6 +23,9 @@ stan_model_dir_s22fu <- paste0(path_to_project_directory,"code/stan_models/")
 stan_model_dir_s22 <- paste0(path_to_s22,"code/stan_models/final_models/")
 model_out_dir <- paste0(path_to_project_directory,"output/results/stan_model_fits/")
 
+fig_dir <- "/Users/dp/Documents/manuscripts/vrv/figures_tables/"
+
+
 library(cmdstanr)
 library(tidyverse)
 library(tidybayes)
@@ -102,6 +105,10 @@ trials <- trials %>% mutate(unchosen_frac = ifelse(choice == "fA",fB_ix,fA_ix))
 #add a column with the affect probe number for each subject (999 if no probe response). These will be passed into Stan
 trials <- add_probe_number(trials,newcol="dec_probe_number",val_col="dec_rate") #for decision probes
 trials <- add_probe_number(trials,newcol="feed_probe_number",val_col="feed_rate") #for decision probes
+
+# Add pairs col
+new_trials_list <- by(trials,trials$sub_index,create_pair_cols_sub_s2)
+trials <- do.call(rbind,new_trials_list)
 ```
 
 # Data review
@@ -1267,4 +1274,57 @@ ggplot(sim_effs, aes(x = bQs)) +
   geom_histogram(fill = "steelblue", color = "black") +  # Adjust binwidth as needed
   geom_vline(xintercept = 0, color = "black", linewidth = 1) +  # Black vertical line at 0
   geom_vline(xintercept = real_effs$bQ, color = "red", linewidth = 1)
+```
+
+# Affect model with different formulations of pre-trial expectations
+
+```{r}
+combined_shrink_freeVlr <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"combined_shrink_freeVlr.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         skip=c("waic","check_csvs"),
+                         n_t=104)
+```
+
+```{r}
+combined_shrink_av_vblock <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"combined_shrink_av_vblock.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         skip=c("waic","check_csvs"),
+                         n_t=104)
+```
+
+
+```{r}
+combined_shrink_av_vtask <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"combined_shrink_av_vtask.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         skip=c("waic","check_csvs"),
+                         n_t=104)
+```
+
+```{r}
+combined_shrink_onpolV <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"combined_shrink_onpolV.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         skip=c("waic","check_csvs"),
+                         n_t=104)
+```
+
+On-policy V model
+```{r}
+set.seed(1)
+freelr_vec_fits <- get_vec_lens("combined_shrink_freeVlr",vars=c("dpiw_mu","fpiw_mu"),model_out_dir=model_out_dir)
+avblock_vec_fits <- get_vec_lens("combined_shrink_av_vblock",vars=c("dpiw_mu","fpiw_mu"),model_out_dir=model_out_dir)
+avtask_vec_fits <- get_vec_lens("combined_shrink_av_vtask",vars=c("dpiw_mu","fpiw_mu"),model_out_dir=model_out_dir)
+onpol_vec_fits <- get_vec_lens("combined_shrink_onpolV",vars=c("dpiw_mu","fpiw_mu"),model_out_dir=model_out_dir)
+
+ggsave(paste0(fig_dir,"onpol_lens_s2.pdf"),onpol_vec_fits$theor_mn_plot,width=1.8,height=1.35)
+ggsave(paste0(fig_dir,"vblock_lens_s2.pdf"),avblock_vec_fits$theor_mn_plot,width=1.8,height=1.35)
+ggsave(paste0(fig_dir,"vtask_lens_s2.pdf"),avtask_vec_fits$theor_mn_plot,width=1.8,height=1.35)
+ggsave(paste0(fig_dir,"freelr_lens_s2.pdf"),freelr_vec_fits$theor_mn_plot,width=1.8,height=1.35)
 ```
