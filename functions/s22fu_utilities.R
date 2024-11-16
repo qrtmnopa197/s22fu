@@ -10,10 +10,18 @@ est_bq_ba_s2 <- function(data){
     data$q_ch[r] <- data[r,paste0("q_",data$chosen_frac[r])]
   }
   
-  # Estimate affect on each trial
-  val_fit <- lm(feed_rate_z ~ chosen_out + unchosen_out + q_ch + prat + block + trial_nl, data)
-  data <- data %>% mutate(mod_val = val_fit$coefficients[1] + val_fit$coefficients[2]*chosen_out +
+  # Add estimates of the affective impacts of outcomes
+  data_list <- list()
+  for(s in 1:max(data$sub_index)){
+    sub_data <- filter(data,sub_index == s)
+    
+    val_fit <- lm(feed_rate_z ~ chosen_out + unchosen_out + q_ch + prat + block + trial_nl, sub_data)
+    
+    sub_data <- sub_data %>% mutate(mod_val = val_fit$coefficients[1] + val_fit$coefficients[2]*chosen_out +
                                     val_fit$coefficients[3]*unchosen_out + val_fit$coefficients[4]*q_ch)
+    data_list[[s]] <- sub_data
+  }
+  data <- do.call(rbind,data_list)
   
   # Get remaining associations used to predict choice
   data <- data %>%

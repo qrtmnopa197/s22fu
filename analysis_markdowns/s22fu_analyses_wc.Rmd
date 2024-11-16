@@ -1212,7 +1212,7 @@ sim_choice <- get_draws(model="aff_only_s2",vars=c("sim_choice"),model_out_dir=m
 sim_feed_rat <- get_draws("aff_only_s2",vars=c("sim_feed_rat"),model_out_dir=model_out_dir)
 sim_prat <- get_draws("aff_only_s2",vars=c("sim_prat"),model_out_dir=model_out_dir)
 
-plan(multisession, workers = 8)
+plan(multisession, workers = 12)
 registerDoFuture()
 
 sim_effs <- data.frame("bQs"=c(),"bAs"=c())
@@ -1270,12 +1270,42 @@ save(real_effs,file=paste0(path_to_project_directory,"output/s2_aff_only_real_ef
 
 Finally, we plot the simulated and actual effects for comparison
 ```{r}
-ggplot(sim_effs, aes(x = bQs)) +
+bq_sims <- ggplot(sim_effs, aes(x = bQs)) +
   geom_histogram(fill = "steelblue", color = "black") +  # Adjust binwidth as needed
   geom_vline(xintercept = 0, color = "black", linewidth = 1) +  # Black vertical line at 0
-  geom_vline(xintercept = real_effs$bQ, color = "red", linewidth = 1)
+  geom_vline(xintercept = real_effs$bQ, color = "red", linewidth = 1) +
+            theme_minimal() +
+            theme(
+              panel.grid.major.y = element_blank(),  # Remove major vertical grid lines
+              panel.grid.minor.y = element_blank(),      
+              panel.grid.major.x = element_blank(),  # Remove major vertical grid lines
+              panel.grid.minor.x = element_blank(), 
+              axis.title.x = element_blank(),       # Remove x-axis label
+              axis.title.y = element_blank(),        # Remove y-axis label
+              axis.ticks.y = element_blank(),
+              axis.text.y = element_blank()
+            )
+ggsave("/Users/dp/Documents/manuscripts/vrv/figures_tables/supp_fig_2a_s2.pdf",bq_sims,width=2,height=1.33)
 ```
 
+```{r}
+ba_sims <- ggplot(sim_effs, aes(x = bAs)) +
+            geom_histogram(fill = "steelblue", color = "black") +  # Adjust binwidth as needed
+            geom_vline(xintercept = 0, color = "black", size = 1) +  # Black vertical line at 0
+            geom_vline(xintercept = real_effs$bA, color = "red", size = 1) +
+                      theme_minimal() +
+                      theme(
+                        panel.grid.major.y = element_blank(),  # Remove major vertical grid lines
+                        panel.grid.minor.y = element_blank(),      
+                        panel.grid.major.x = element_blank(),  # Remove major vertical grid lines
+                        panel.grid.minor.x = element_blank(), 
+                        axis.title.x = element_blank(),       # Remove x-axis label
+                        axis.title.y = element_blank(),        # Remove y-axis label
+                        axis.ticks.y = element_blank(),
+                        axis.text.y = element_blank()
+                      )
+ggsave("/Users/dp/Documents/manuscripts/vrv/figures_tables/supp_fig_2b_s2.pdf",ba_sims,width=2,height=1.33)
+```
 # Affect model with different formulations of pre-trial expectations
 
 ```{r}
