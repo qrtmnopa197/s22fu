@@ -1,6 +1,6 @@
-// Predict choice with Q-learning model that includes autocorrelation and forgetting
+// Predicts choice with Q-learning model that includes autocorrelation and forgetting
 // Additionally, this includes a linear model of valence ratings predicted by variables from all theories.
-// Non-centered parameterization is used for all hierarchical parameters.
+// Uses an independent learning rate for V_block
 
 data {
   //Choice model data
@@ -131,9 +131,7 @@ transformed parameters {
   vector[n_dp] dec_pred; // predicted post-decision valence ratings
   vector[n_fp] feed_pred; // predicted post-feedback ratings
   {//anonymous_scope_start
-    array[n_s,n_t] vector[n_f] Q; // The Q values. These are a 2d array containing vectors: the first dimension is
-                                  // the subject, the second dimension is the trial, and for each trial there's a
-                                  // vector with a Q value for each fractal
+    array[n_s,n_t] vector[n_f] Q; // The Q values
     array[n_s,n_t] vector[n_f] C; // Choice autocorrelation value, of the same structure as Q
     array[n_s] vector[n_t] V; //V_block (block-level expected value)
 
@@ -239,13 +237,13 @@ model {
   
   //Choice model group-level priors
   // add weakly informative hyperpriors on the group-level parameters to the target density
-  alpha_mu ~ normal(-.05,1.7); //This yields a nearly uniform 0-1 prior when logit transformed
-  alpha_sigma ~ normal(0,4); //allow for large inter-subject heterogeneity without enforcing marginal subject-level priors that are excessively horeshoe-shaped
-  tau_mu ~ normal(-.05,1.7);//setting tau priors same as alpha
+  alpha_mu ~ normal(-.05,1.7); 
+  alpha_sigma ~ normal(0,4); 
+  tau_mu ~ normal(-.05,1.7);
   tau_sigma ~ normal(0,4);
   vlr_mu ~ normal(-.05,1.7);
   vlr_sigma ~ normal(0,4);
-  forget_mu ~ normal(-.05,1.7);//setting forgetting rate priors same as alpha
+  forget_mu ~ normal(-.05,1.7);
   forget_sigma ~ normal(0,4);
   
   beta_mu ~ normal(1,5); 
@@ -254,8 +252,8 @@ model {
   phi_sigma ~ normal(0,10);
   
   //Affect model group-level priors
-  base_mu ~ normal(0,3); //set prior for ad intercept; weakly informative - 1SD mean that baseline valal is about as highest/lowest affect the subject experiences in the task
-  base_sigma ~ normal(0,5); //1 SD out suggests that if the average subject is near an affective low at baseline, some subjects may still be near an affective high, more or less
+  base_mu ~ normal(0,3); 
+  base_sigma ~ normal(0,5); 
   dec_mu ~ normal(0,3);
   blk_num_mu ~ normal(0,3);
   bnum_dec_sigma ~ normal(0,8);

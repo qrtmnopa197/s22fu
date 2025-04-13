@@ -1,6 +1,4 @@
-// Q-learning model with choice autocorrelation and forgetting (independent decay rate).
-// Additionally, this includes a linear model of valence ratings predicted by variables from all theories.
-// Non-centered parameterization is used for all hierarchical parameters.
+// RL model that assumes only affect associations influence choices
 
 data {
   //Choice model data
@@ -127,9 +125,7 @@ transformed parameters {
   real A_sd;
   real C_sd;
   {//anonymous_scope_start
-    array[n_s,n_t] vector[n_f] Q; // The Q values. These are a 2d array containing vectors: the first dimension is
-                                  // the subject, the second dimension is the trial, and for each trial there's a
-                                  // vector with a Q value for each fractal
+    array[n_s,n_t] vector[n_f] Q; // The Q values
     array[n_s,n_t] vector[n_f] A; // Expected affective valence, with the same structure as Q
     array[n_s,n_t] vector[n_f] C; // Choice autocorrelation value, of the same structure as Q
     array[n_s] vector[n_t] V; //V_block (block-level expected value)
@@ -165,9 +161,9 @@ transformed parameters {
     //to set the weight on the block predictor, loop through each subject...
     for(s in 1:n_s){
       if(decrate_first[s] == 0){
-        blk[s] = blk_num_mu + dec_mu + bnum_dec_sigma*blk_z[s]; //if this subject completed decision ratings in the second block, then the decision effect should be added to the block effect
+        blk[s] = blk_num_mu + dec_mu + bnum_dec_sigma*blk_z[s]; 
       } else if(decrate_first[s] == 1){
-        blk[s] = blk_num_mu - dec_mu + bnum_dec_sigma*blk_z[s]; //if the subject completed decision ratings in the first block, the decision effect should be subtracted
+        blk[s] = blk_num_mu - dec_mu + bnum_dec_sigma*blk_z[s]; 
       }
     }
     
@@ -191,7 +187,7 @@ transformed parameters {
           V[s,t] = 0; //if this is the first trial of the block, then V_block should be 0
         }
         
-        choice_lik[(s-1)*n_t+t] = categorical_logit_lpmf(choice[s,t] | aff_sens[s]*A[s,t,{fA[s,t],fB[s,t]}] + phi[s]*C[s,t,{fA[s,t],fB[s,t]}]); //get the likelihood of the choice made on this trial.
+        choice_lik[(s-1)*n_t+t] = categorical_logit_lpmf(choice[s,t] | aff_sens[s]*A[s,t,{fA[s,t],fB[s,t]}] + phi[s]*C[s,t,{fA[s,t],fB[s,t]}]); 
         
         //get differences on this trial
         A_diff[s,t] = A[s,t,fA[s,t]] - A[s,t,fB[s,t]];
@@ -259,11 +255,11 @@ model {
   
   //Choice model group-level priors
   // add weakly informative hyperpriors on the group-level parameters to the target density
-  alpha_mu ~ normal(-.05,1.7); //This yields a nearly uniform 0-1 prior when logit transformed
-  alpha_sigma ~ normal(0,4); //allow for large inter-subject heterogeneity without enforcing marginal subject-level priors that are excessively horeshoe-shaped
-  tau_mu ~ normal(-.05,1.7);//setting tau priors same as alpha
+  alpha_mu ~ normal(-.05,1.7); 
+  alpha_sigma ~ normal(0,4); 
+  tau_mu ~ normal(-.05,1.7);
   tau_sigma ~ normal(0,4);
-  forget_mu ~ normal(-.05,1.7);//setting forgetting rate priors same as alpha
+  forget_mu ~ normal(-.05,1.7);
   forget_sigma ~ normal(0,4);
   
   aff_sens_mu ~ normal(0,4); 
@@ -272,8 +268,8 @@ model {
   phi_sigma ~ normal(0,10);
   
   //Affect model group-level priors
-  base_mu ~ normal(0,3); //set prior for ad intercept; weakly informative - 1SD mean that baseline valal is about as highest/lowest affect the subject experiences in the task
-  base_sigma ~ normal(0,5); //1 SD out suggests that if the average subject is near an affective low at baseline, some subjects may still be near an affective high, more or less
+  base_mu ~ normal(0,3); 
+  base_sigma ~ normal(0,5); 
   dec_mu ~ normal(0,3);
   blk_num_mu ~ normal(0,3);
   bnum_dec_sigma ~ normal(0,8);
@@ -317,9 +313,7 @@ generated quantities{
   vector[n_dp] sim_dec_rat;
   vector[n_fp] sim_feed_rat;
   {
-    array[n_s,n_t] vector[n_f] Q; // The Q values. These are a 2d array containing vectors: the first dimension is
-                                  // the subject, the second dimension is the trial, and for each trial there's a
-                                  // vector with a Q value for each fractal
+    array[n_s,n_t] vector[n_f] Q; // The Q values
     array[n_s,n_t] vector[n_f] A; // Expected affective valence, with the same structure as Q
     array[n_s,n_t] vector[n_f] C; // Choice autocorrelation value, of the same structure as Q
     array[n_s] vector[n_t] V; //V_block (block-level expected value)
@@ -361,9 +355,9 @@ generated quantities{
     //to set the weight on the block predictor, loop through each subject...
     for(s in 1:n_s){
       if(decrate_first[s] == 0){
-        blk[s] = blk_num_mu + dec_mu + bnum_dec_sigma*blk_z[s]; //if this subject completed decision ratings in the second block, then the decision effect should be added to the block effect
+        blk[s] = blk_num_mu + dec_mu + bnum_dec_sigma*blk_z[s]; 
       } else if(decrate_first[s] == 1){
-        blk[s] = blk_num_mu - dec_mu + bnum_dec_sigma*blk_z[s]; //if the subject completed decision ratings in the first block, the decision effect should be subtracted
+        blk[s] = blk_num_mu - dec_mu + bnum_dec_sigma*blk_z[s]; 
       }
     }
     
@@ -388,7 +382,7 @@ generated quantities{
           curr_prat = 0;
         }
         
-        sim_choice[(s-1)*n_t+t] = categorical_logit_rng(aff_sens[s]*A[s,t,{fA[s,t],fB[s,t]}] + phi[s]*C[s,t,{fA[s,t],fB[s,t]}]); //get the likelihood of the choice made on this trial.
+        sim_choice[(s-1)*n_t+t] = categorical_logit_rng(aff_sens[s]*A[s,t,{fA[s,t],fB[s,t]}] + phi[s]*C[s,t,{fA[s,t],fB[s,t]}]); 
         ch_lik = categorical_logit_lpmf(sim_choice[(s-1)*n_t+t] | aff_sens[s]*A[s,t,{fA[s,t],fB[s,t]}] + phi[s]*C[s,t,{fA[s,t],fB[s,t]}]);
         
         // Set the chosen and unchosen outcome for this trial
@@ -425,10 +419,10 @@ generated quantities{
           dpi[2] = Q[s,t,ch_frac]; //assign Q_chosen
           dpi[3] = Q[s,t,unch_frac]; //assign Q_unchosen
           sim_dec_rat[dp_num[s,t]] = normal_rng(base[s] + blk[s]*block_c[s,t] + tr[s]*tinb_c[s,t] + pr[s]*curr_prat + dot_product(dpiw[s],dpi),
-                                                d_resid); //predict decision rating
+                                                d_resid); 
           curr_prat = sim_dec_rat[dp_num[s,t]];
         } else if(fp_num[s,t] != 0){
-          sim_feed_rat[fp_num[s,t]] = normal_rng(feed_curr_pred + feed_nuis,f_resid); //predict feedback rating
+          sim_feed_rat[fp_num[s,t]] = normal_rng(feed_curr_pred + feed_nuis,f_resid);
           curr_prat = sim_feed_rat[fp_num[s,t]];
         }
 

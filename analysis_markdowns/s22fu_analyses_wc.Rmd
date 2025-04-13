@@ -1179,9 +1179,9 @@ up_tab[,c("median","q5","q95")] <- round(up_tab[,c("median","q5","q95")],2)
 write.csv(up_tab,"~/Desktop/temp.csv")
 ```
 
-# Testing for spurious positive effects of reward associations
-Here, we consider whether the observed effect of reward associations on choice could be due to its collinearity
-with affect assocations.
+# Verifying that reward associations have a positive effect on choice
+Here, we consider whether the observed effect of reward associations on choice could be due to noise in our
+estimates of affect.
 
 First, we fit a model and simulate data in which only affect associations influence choice
 ```{r}
@@ -1189,8 +1189,6 @@ aff_only_s2 <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"aff_only_
                          model_out_dir = model_out_dir,
                          raw_data = trials,
                          study = "s22fu",
-                         iter_warmup = 10,
-                         iter_sampling = 10,
                          n_t=104)
 aff_only_s2 <- read_fsml("aff_only_s2",model_out_dir=model_out_dir)
 ```
@@ -1212,6 +1210,7 @@ sim_choice <- get_draws(model="aff_only_s2",vars=c("sim_choice"),model_out_dir=m
 sim_feed_rat <- get_draws("aff_only_s2",vars=c("sim_feed_rat"),model_out_dir=model_out_dir)
 sim_prat <- get_draws("aff_only_s2",vars=c("sim_prat"),model_out_dir=model_out_dir)
 
+# Run simulations in parallel
 plan(multisession, workers = 12)
 registerDoFuture()
 
@@ -1258,7 +1257,7 @@ trials_bqba_real <- trials %>% select(sub_index,block,trial_nl,fA_ix,fB_ix,feed_
                                rename(prat = prev_rate, choice = choice_numeric)
                                
 
-model_pred_arl_nonuis <- read_fsml("model_pred_arl_nonuis",model_out_dir=model_out_dir)
+# model_pred_arl_nonuis <- read_fsml("model_pred_arl_nonuis",model_out_dir=model_out_dir)
 # Add parameter means needed for approximate data analysis
 trials_bqba_real <- add_param_means(model_pred_arl_nonuis$sum,"alpha",trials_bqba_real)
 trials_bqba_real <- add_param_means(model_pred_arl_nonuis$sum,"tau",trials_bqba_real)
@@ -1268,8 +1267,9 @@ real_effs <- est_bq_ba_s2(trials_bqba_real)
 save(real_effs,file=paste0(path_to_project_directory,"output/s2_aff_only_real_effs.Rdata"))
 ```
 
-Finally, we plot the simulated and actual effects for comparison
+Finally, we plot the simulated and actual effects of Q and A on choice
 ```{r}
+# Plot effects of Q on choice
 bq_sims <- ggplot(sim_effs, aes(x = bQs)) +
   geom_histogram(fill = "steelblue", color = "black") +  # Adjust binwidth as needed
   geom_vline(xintercept = 0, color = "black", linewidth = 1) +  # Black vertical line at 0
@@ -1289,6 +1289,7 @@ ggsave("/Users/dp/Documents/manuscripts/vrv/figures_tables/supp_fig_2a_s2.pdf",b
 ```
 
 ```{r}
+# Plot effects of A on choice
 ba_sims <- ggplot(sim_effs, aes(x = bAs)) +
             geom_histogram(fill = "steelblue", color = "black") +  # Adjust binwidth as needed
             geom_vline(xintercept = 0, color = "black", size = 1) +  # Black vertical line at 0
@@ -1306,17 +1307,12 @@ ba_sims <- ggplot(sim_effs, aes(x = bAs)) +
                       )
 ggsave("/Users/dp/Documents/manuscripts/vrv/figures_tables/supp_fig_2b_s2.pdf",ba_sims,width=2,height=1.33)
 ```
-# Affect model with different formulations of pre-trial expectations
 
-```{r}
-combined_shrink_freeVlr <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"combined_shrink_freeVlr.stan"),
-                         model_out_dir = model_out_dir,
-                         raw_data = trials,
-                         study = "s22fu",
-                         skip=c("waic","check_csvs"),
-                         n_t=104)
-```
+# Valence models with alternative formulations of pre-trial reward expectations
+These models are the same as the best-fitting model of valence, except they replace V_block with different
+estimates of pre-trial reward expectations.
 
+V_block replaced with the average reward in the block
 ```{r}
 combined_shrink_av_vblock <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"combined_shrink_av_vblock.stan"),
                          model_out_dir = model_out_dir,
@@ -1326,7 +1322,7 @@ combined_shrink_av_vblock <- fit_stan_model(stan_file = paste0(stan_model_dir_s2
                          n_t=104)
 ```
 
-
+V_block replaced with the average reward in the task 
 ```{r}
 combined_shrink_av_vtask <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"combined_shrink_av_vtask.stan"),
                          model_out_dir = model_out_dir,
@@ -1336,6 +1332,7 @@ combined_shrink_av_vtask <- fit_stan_model(stan_file = paste0(stan_model_dir_s22
                          n_t=104)
 ```
 
+V_block replaced with a weighted average of Q-values
 ```{r}
 combined_shrink_onpolV <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"combined_shrink_onpolV.stan"),
                          model_out_dir = model_out_dir,
@@ -1345,9 +1342,18 @@ combined_shrink_onpolV <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu
                          n_t=104)
 ```
 
-On-policy V model
+V_block calculated using an independent learning rate
 ```{r}
-set.seed(1)
+combined_shrink_freeVlr <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"combined_shrink_freeVlr.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         skip=c("waic","check_csvs"),
+                         n_t=104)
+```
+
+Get plots with theory vector lengths based on all of these models
+```{r}
 freelr_vec_fits <- get_vec_lens("combined_shrink_freeVlr",vars=c("dpiw_mu","fpiw_mu"),model_out_dir=model_out_dir)
 avblock_vec_fits <- get_vec_lens("combined_shrink_av_vblock",vars=c("dpiw_mu","fpiw_mu"),model_out_dir=model_out_dir)
 avtask_vec_fits <- get_vec_lens("combined_shrink_av_vtask",vars=c("dpiw_mu","fpiw_mu"),model_out_dir=model_out_dir)
