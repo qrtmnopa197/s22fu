@@ -38,6 +38,7 @@ library(lmerTest)
 library(future)
 library(doFuture)
 library(foreach)
+library(posterior)
 
 source(paste0(path_to_project_directory,"code/functions/s22fu_utilities.R"))
 source(paste0(path_to_s22,"code/functions/s22_utilities.R"))
@@ -864,6 +865,17 @@ quantile(mpan_scds[,,"scd_aff_sens_mu"],c(.025,.5,.975))
 mean(mpan_scds[,,"scd_aff_sens_mu"] > 0)
 quantile(mpan_scds[,,"scd_beta_mu"] - mpan_scds[,,"scd_aff_sens_mu"],c(.025,.5,.975))
 mean(mpan_scds[,,"scd_beta_mu"] > mpan_scds[,,"scd_aff_sens_mu"])
+```
+
+```{r}
+mpan_scds_intervals <- create_interval_plot(arr = mpan_scds,names = c("scd_beta_mu","scd_aff_sens_mu"),
+                                          xmin = -.012,xmax = 2) +
+                        theme(panel.grid.major.x = element_line(color = "#DCDCDC", size = 1.87),
+                              panel.background = element_rect(fill = "white", color = NA),
+                              axis.text.x = element_blank(),
+                              axis.text.y=element_blank())
+mpan_scds_intervals
+ggsave("/Users/dp/Documents/conferences/SASolina_2025/figures/mpan_scds_intervals.pdf",mpan_scds_intervals,width=2,height=1)
 
 ```
 
@@ -1364,3 +1376,36 @@ ggsave(paste0(fig_dir,"vblock_lens_s2.pdf"),avblock_vec_fits$theor_mn_plot,width
 ggsave(paste0(fig_dir,"vtask_lens_s2.pdf"),avtask_vec_fits$theor_mn_plot,width=1.8,height=1.35)
 ggsave(paste0(fig_dir,"freelr_lens_s2.pdf"),freelr_vec_fits$theor_mn_plot,width=1.8,height=1.35)
 ```
+
+# Fitting model with just q-learning
+
+```{r}
+q_only <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"q_only.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         skip=c("waic","check_csvs"),
+                         n_t=104)
+```
+
+```{r}
+scd_beta_mu_q_only <- get_draws("q_only",model_out_dir=model_out_dir,vars=c("scd_beta_mu"))
+get_ci_pd(draws = scd_beta_mu_q_only)
+```
+
+```{r}
+alpha_mu_q_only <- get_draws("q_only",model_out_dir=model_out_dir,vars=c("alpha_mu"))
+get_ci_pd(draws = sigmoid(alpha_mu_q_only))
+```
+
+# Outputting bq(Q_a-Q_b) + bq(A_a-A_b)
+Refit the main model, outputting bq(Q_a-Q_b) + ba(A_a-A_b) for each trial
+
+```{r}
+s22fu_qa_term_out <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"s22fu_qa_term_out.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         n_t=104)
+```
+
