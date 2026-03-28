@@ -1409,3 +1409,44 @@ s22fu_qa_term_out <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"s22
                          n_t=104)
 ```
 
+# No-autocorrelation model variants
+
+Fit no-choice-autocorrelation versions of the main affect and choice models.
+```{r}
+combined_shrink_nocac <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"combined_shrink_nocac.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         n_t=104)
+
+mpan_nocac <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"mpan_nocac.stan"),
+                         model_out_dir = model_out_dir,
+                         raw_data = trials,
+                         study = "s22fu",
+                         n_t=104)
+```
+
+Assess effects of Q and A on choice from the no-autocorrelation choice model posterior.
+```{r}
+mpan_nocac_scds <- get_draws("mpan_nocac",model_out_dir=model_out_dir,vars=c("scd_beta_mu","scd_aff_sens_mu"))
+quantile(mpan_nocac_scds[,,"scd_beta_mu"],c(.025,.5,.975))
+mean(mpan_nocac_scds[,,"scd_beta_mu"] > 0)
+quantile(mpan_nocac_scds[,,"scd_aff_sens_mu"],c(.025,.5,.975))
+mean(mpan_nocac_scds[,,"scd_aff_sens_mu"] > 0)
+quantile(mpan_nocac_scds[,,"scd_beta_mu"] - mpan_nocac_scds[,,"scd_aff_sens_mu"],c(.025,.5,.975))
+mean(mpan_nocac_scds[,,"scd_beta_mu"] > mpan_nocac_scds[,,"scd_aff_sens_mu"])
+```
+
+Estimate no-autocorrelation vector lengths for reward, prediction error, counterfactual comparison, and residual.
+```{r}
+combined_shrink_nocac_vec_lens <- get_vec_lens("combined_shrink_nocac",vars=c("dpiw_mu","fpiw_mu"),model_out_dir=model_out_dir)
+
+cat("SV\n")
+quantile(combined_shrink_nocac_vec_lens$theor_mn[,,"sv"],c(.025,.5,.975))
+cat("\nPE\n")
+quantile(combined_shrink_nocac_vec_lens$theor_mn[,,"pe"],c(.025,.5,.975))
+cat("\nCC\n")
+quantile(combined_shrink_nocac_vec_lens$theor_mn[,,"cc"],c(.025,.5,.975))
+cat("\nResidual\n")
+quantile(combined_shrink_nocac_vec_lens$theor_mn[,,"resid"],c(.025,.5,.975))
+```
