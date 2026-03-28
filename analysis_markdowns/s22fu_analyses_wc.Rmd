@@ -1450,3 +1450,29 @@ quantile(combined_shrink_nocac_vec_lens$theor_mn[,,"cc"],c(.025,.5,.975))
 cat("\nResidual\n")
 quantile(combined_shrink_nocac_vec_lens$theor_mn[,,"resid"],c(.025,.5,.975))
 ```
+
+# Vector-length recovery simulations (Study 2)
+Simulate datasets under reward theory, PE theory, CC theory, and a combination of these theories (i.e., "blend" condition).
+Then recover vector lengths with OLS (subject fixed effects).
+```{r}
+rec_dir <- paste0(path_to_project_directory,"output/results/vector_recovery/")
+
+s2_vrec <- run_s2_vector_recovery(
+  trials = trials,
+  model_out_dir = model_out_dir,
+  n_sims = 250,
+  seed = 19
+)
+
+write.csv(s2_vrec$estimates,paste0(rec_dir,"s2_vector_recovery_estimates.csv"),row.names=FALSE)
+
+ggsave(paste0(fig_dir,"s2_vector_recovery_panel.pdf"),s2_vrec$panel_plot,width=5.5,height=3.8,device=cairo_pdf,bg="white")
+ggsave(paste0(fig_dir,"s2_vector_recovery_reward.pdf"),s2_vrec$condition_plots[["reward"]],width=2.4,height=1.8,device=cairo_pdf,bg="white")
+ggsave(paste0(fig_dir,"s2_vector_recovery_pe.pdf"),s2_vrec$condition_plots[["pe"]],width=2.4,height=1.8,device=cairo_pdf,bg="white")
+ggsave(paste0(fig_dir,"s2_vector_recovery_cc.pdf"),s2_vrec$condition_plots[["cc"]],width=2.4,height=1.8,device=cairo_pdf,bg="white")
+ggsave(paste0(fig_dir,"s2_vector_recovery_blend.pdf"),s2_vrec$condition_plots[["blend"]],width=2.4,height=1.8,device=cairo_pdf,bg="white")
+```
+
+```{r}
+s2_vrec$panel_plot
+```

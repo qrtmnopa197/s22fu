@@ -191,3 +191,602 @@ add_prevrate <- function(df,rat_col_name,pr_col_name="prev_rate"){
   }
   return(df)
 }
+
+# Study 2 vector-length recovery simulation helpers
+
+# This block implements the Study 2 vector-length recovery workflow.
+# High-level flow:
+# 1) Draw subject-level non-RL parameters from population distributions (posterior-median anchored).
+# 2) Draw composite-variable effects for one generating condition (reward / PE / CC / blend).
+# 3) Convert component draws to the 7 raw coefficients used in the affect model.
+# 4) Simulate trial-level predictors and affect ratings.
+# 5) Recover RL effects with OLS + subject fixed effects.
+# 6) Convert recovered effects to SV/PE/CC/residual vector lengths.
+# 7) Return tidy outputs and plots.
+
+# Returns the median estimate for a named parameter from fsml$sum.
+# sum_df: posterior summary table from read_fsml(... )$sum
+# var_name: parameter name in the summary table
+get_median <- function(sum_df, var_name) {
+  row <- sum_df[sum_df$variable == var_name, , drop = FALSE]
+  if (nrow(row) == 0) {
+    stop(paste0("Could not find parameter in summary: ", var_name))
+  }
+  as.numeric(row$median[1])
+}
+
+# Draws one set of subject-level nuisance/choice parameters for one simulated dataset.
+# Subject-level values are sampled from normal population distributions whose centers
+# are set by posterior medians of group-level parameters.
+s2_draw_subject_params <- function(sum_df, sub_df) {
+  n_s <- nrow(sub_df)
+
+  # Choice/RL parameter hyperparameters
+  alpha_mu <- get_median(sum_df, "alpha_mu")
+  alpha_sigma <- get_median(sum_df, "alpha_sigma")
+  forget_mu <- get_median(sum_df, "forget_mu")
+  forget_sigma <- get_median(sum_df, "forget_sigma")
+  beta_mu <- get_median(sum_df, "beta_mu")
+  beta_sigma <- get_median(sum_df, "beta_sigma")
+  phi_mu <- get_median(sum_df, "phi_mu")
+  phi_sigma <- get_median(sum_df, "phi_sigma")
+  tau_mu <- get_median(sum_df, "tau_mu")
+  tau_sigma <- get_median(sum_df, "tau_sigma")
+
+  # Affect nuisance parameter hyperparameters
+  base_mu <- get_median(sum_df, "base_mu")
+  base_sigma <- get_median(sum_df, "base_sigma")
+  blk_num_mu <- get_median(sum_df, "blk_num_mu")
+  dec_mu <- get_median(sum_df, "dec_mu")
+  bnum_dec_sigma <- get_median(sum_df, "bnum_dec_sigma")
+  tr_mu <- get_median(sum_df, "tr_mu")
+  tr_sigma <- get_median(sum_df, "tr_sigma")
+  pr_mu <- get_median(sum_df, "pr_mu")
+  pr_sigma <- get_median(sum_df, "pr_sigma")
+
+  # Draw one row per subject.
+  # Constrained parameters are sampled on latent scale then transformed.
+  data.frame(
+    sub_index = sub_df$sub_index,
+    decrate_first = sub_df$decrate_first,
+    alpha = plogis(rnorm(n_s, mean = alpha_mu, sd = alpha_sigma)),
+    forget = plogis(rnorm(n_s, mean = forget_mu, sd = forget_sigma)),
+    beta = rnorm(n_s, mean = beta_mu, sd = beta_sigma),
+    phi = rnorm(n_s, mean = phi_mu, sd = phi_sigma),
+    tau = plogis(rnorm(n_s, mean = tau_mu, sd = tau_sigma)),
+    base = rnorm(n_s, mean = base_mu, sd = base_sigma),
+    blk_z = rnorm(n_s, mean = 0, sd = 1),
+    tr = rnorm(n_s, mean = tr_mu, sd = tr_sigma),
+    pr = rnorm(n_s, mean = pr_mu, sd = pr_sigma),
+    stringsAsFactors = FALSE
+  ) |>
+    dplyr::mutate(
+      # Keep the same block-effect construction used in combined_shrink:
+      # subjects who did decision ratings first vs second get opposite signs on dec_mu.
+      blk = ifelse(
+        decrate_first == 0,
+        blk_num_mu + dec_mu + bnum_dec_sigma * blk_z,
+        blk_num_mu - dec_mu + bnum_dec_sigma * blk_z
+      )
+    )
+}
+
+# Draws subject-level effects of composite predictors for a single generating condition ("composite predictors" 
+# refers to the variables in Table 1a.)
+# Composite-effect columns:
+# r_choice: effect of R_choice (= Q_ch) on post-choice valence
+# pe_choice: effect of PE_choice (= Q_ch - V_block) on post-choice valence
+# cc_choice: effect of CC_choice (= Q_ch - Q_unch) on post-choice valence
+# r_out: effect of R_out (= r_ch) on post-outcome valence
+# pe_out_v: effect of PE_out,V (= r_ch - V_trial) on post-outcome valence
+# pe_out_q: effect of PE_out,Q (= r_ch - Q_ch) on post-outcome valence
+# cc_out: effect of CC_out (= r_ch - r_unch) on post-outcome valence
+# All composite-effect draws are independent.
+draw_composite_effects <- function(n_s, condition) {
+  draw_norm <- function(mu, sd) rnorm(n_s, mean = mu, sd = sd)
+
+  # Start with all composite effects at 0, then activate condition-specific terms.
+  out <- data.frame(
+    r_choice = rep(0, n_s),
+    r_out = rep(0, n_s),
+    pe_choice = rep(0, n_s),
+    pe_out_v = rep(0, n_s),
+    pe_out_q = rep(0, n_s),
+    cc_choice = rep(0, n_s),
+    cc_out = rep(0, n_s)
+  )
+
+  if (condition == "reward") {
+    out$r_choice <- draw_norm(0.6, 0.2)
+    out$r_out <- draw_norm(0.6, 0.2)
+  } else if (condition == "pe") {
+    out$pe_choice <- draw_norm(0.6, 0.2)
+    out$pe_out_v <- draw_norm(0.6, 0.2)
+    out$pe_out_q <- draw_norm(0.6, 0.2)
+  } else if (condition == "cc") {
+    out$cc_choice <- draw_norm(0.6, 0.2)
+    out$cc_out <- draw_norm(0.6, 0.2)
+  } else if (condition == "blend") {
+    out$r_choice <- draw_norm(0.6, 0.2)
+    out$r_out <- draw_norm(0.6, 0.2)
+    out$pe_choice <- draw_norm(0.2, 0.067)
+    out$pe_out_v <- draw_norm(0.2, 0.067)
+    out$pe_out_q <- draw_norm(0.2, 0.067)
+    out$cc_choice <- draw_norm(0.3, 0.1)
+    out$cc_out <- draw_norm(0.3, 0.1)
+  } else {
+    stop(paste0("Unknown condition: ", condition))
+  }
+
+  out
+}
+
+# Simulates subject-level latent states and RL predictors used by the affect model.
+# Choices are sampled from the model's softmax policy on each trial.
+# This function mirrors the update structure in combined_shrink:
+# - Q and C states evolve trial-by-trial
+# - V resets at block starts and updates from chosen outcomes
+# - choice probability uses beta*Q + phi*C
+# The function outputs trial-level predictor columns that later feed simulated ratings.
+s2_simulate_predictors_one_subject <- function(
+  df_sub,
+  alpha,
+  forget,
+  beta,
+  phi,
+  tau
+) {
+  # Ensure deterministic trial order within subject.
+  df_sub <- df_sub[order(df_sub$overall_trial_nl), , drop = FALSE]
+  n_t <- nrow(df_sub)
+  n_f <- max(c(df_sub$fA_ix, df_sub$fB_ix), na.rm = TRUE)
+
+  # Initialize latent states at 0 at start of subject.
+  Q <- rep(0, n_f)
+  C <- rep(0, n_f)
+  V <- 0
+
+  # Pre-allocate output predictor columns.
+  ret <- df_sub
+  ret$V_block_sim <- NA_real_
+  ret$Q_ch_dec_sim <- NA_real_
+  ret$Q_unch_dec_sim <- NA_real_
+  ret$V_trial_sim <- NA_real_
+  ret$Q_ch_feed_sim <- NA_real_
+  ret$r_ch_sim <- NA_real_
+  ret$r_unch_sim <- NA_real_
+  ret$choice_numeric_sim <- NA_integer_
+  ret$chosen_frac_sim <- NA_integer_
+  ret$unchosen_frac_sim <- NA_integer_
+  ret$chosen_out_sim <- NA_real_
+  ret$unchosen_out_sim <- NA_real_
+
+  for (t in seq_len(n_t)) {
+    if (ret$trial_nl[t] == 1) {
+      V <- 0
+    }
+
+    fA <- ret$fA_ix[t]
+    fB <- ret$fB_ix[t]
+    outA <- ret$out_a[t]
+    outB <- ret$out_b[t]
+
+    # Stable softmax for P(choose A), then sample a simulated choice.
+    etaA <- beta * Q[fA] + phi * C[fA]
+    etaB <- beta * Q[fB] + phi * C[fB]
+    eta_max <- max(etaA, etaB)
+    pA <- exp(etaA - eta_max) / (exp(etaA - eta_max) + exp(etaB - eta_max))
+    chose_A <- stats::rbinom(1, size = 1, prob = pA)
+    choice_num_sim <- ifelse(chose_A == 1, 1L, 2L)
+    ch_sim <- ifelse(choice_num_sim == 1L, fA, fB)
+    unch_sim <- ifelse(choice_num_sim == 1L, fB, fA)
+    ch_out_sim <- ifelse(choice_num_sim == 1L, outA, outB)
+    unch_out_sim <- ifelse(choice_num_sim == 1L, outB, outA)
+    p_ch <- ifelse(choice_num_sim == 1L, pA, 1 - pA)
+
+    ret$V_block_sim[t] <- V
+    ret$Q_ch_dec_sim[t] <- Q[ch_sim]
+    ret$Q_unch_dec_sim[t] <- Q[unch_sim]
+    ret$V_trial_sim[t] <- ch_out_sim * p_ch + unch_out_sim * (1 - p_ch)
+    ret$Q_ch_feed_sim[t] <- Q[ch_sim]
+    ret$r_ch_sim[t] <- ch_out_sim
+    ret$r_unch_sim[t] <- unch_out_sim
+    ret$choice_numeric_sim[t] <- choice_num_sim
+    ret$chosen_frac_sim[t] <- ch_sim
+    ret$unchosen_frac_sim[t] <- unch_sim
+    ret$chosen_out_sim[t] <- ch_out_sim
+    ret$unchosen_out_sim[t] <- unch_out_sim
+
+    # Q/C updates follow combined_shrink structure.
+    old_Q <- Q
+    old_C <- C
+    Q <- (1 - forget) * Q
+    Q[fA] <- old_Q[fA] + alpha * (outA - old_Q[fA])
+    Q[fB] <- old_Q[fB] + alpha * (outB - old_Q[fB])
+
+    # Update C based on simulated choice.
+    if (choice_num_sim == 1L) {
+      choice_a <- 1
+      choice_b <- 0
+    } else {
+      choice_a <- 0
+      choice_b <- 1
+    }
+
+    # Choice-autocorrelation state update for the two shown cues.
+    C <- old_C
+    C[fA] <- old_C[fA] + tau * (choice_a - old_C[fA])
+    C[fB] <- old_C[fB] + tau * (choice_b - old_C[fB])
+
+    # V update from simulated chosen outcome.
+    V <- V + alpha * (ch_out_sim - V)
+  }
+
+  ret
+}
+
+# Simulates one full trial-level dataset (all subjects) for a given parameter draw set.
+# For each subject:
+# 1) simulate latent predictors
+# 2) generate observed decision/outcome ratings with nuisance + RL components + residual noise
+# 3) carry forward previous simulated rating for prev_rate_sim
+# trials must contain scheduled probe columns:
+# dec_probe_number_sched and feed_probe_number_sched
+s2_simulate_affect_dataset <- function(
+  trials,
+  subj_params,
+  comp_betas,
+  d_resid,
+  f_resid
+) {
+  # Pre-allocate one list element per subject for speed and clarity.
+  out_list <- vector("list", length = nrow(subj_params))
+
+  for (i in seq_len(nrow(subj_params))) {
+    s <- subj_params$sub_index[i]
+    df_sub <- trials[trials$sub_index == s, , drop = FALSE]
+    b <- comp_betas[i, , drop = FALSE]
+
+    pred_sub <- s2_simulate_predictors_one_subject(
+      df_sub = df_sub,
+      alpha = subj_params$alpha[i],
+      forget = subj_params$forget[i],
+      beta = subj_params$beta[i],
+      phi = subj_params$phi[i],
+      tau = subj_params$tau[i]
+    )
+
+    prev_sim <- 0
+
+    pred_sub$prev_rate_sim <- NA_real_
+    pred_sub$dec_rate_sim <- NA_real_
+    pred_sub$feed_rate_sim <- NA_real_
+    pred_sub$val_rate_sim <- NA_real_
+
+    for (t in seq_len(nrow(pred_sub))) {
+      # prev_rate_sim is the most recent simulated rating available before trial t.
+      pred_sub$prev_rate_sim[t] <- prev_sim
+
+      # Nuisance terms shared by decision and feedback probes.
+      nuis <- subj_params$base[i] +
+        subj_params$blk[i] * pred_sub$block_cent[t] +
+        subj_params$tr[i] * pred_sub$trial_nl_cent[t] +
+        subj_params$pr[i] * prev_sim
+
+      # Theory-relevant RL components written directly as compound predictors.
+      rl_dec <- b$r_choice * pred_sub$Q_ch_dec_sim[t] +
+        b$pe_choice * (pred_sub$Q_ch_dec_sim[t] - pred_sub$V_block_sim[t]) +
+        b$cc_choice * (pred_sub$Q_ch_dec_sim[t] - pred_sub$Q_unch_dec_sim[t])
+
+      rl_feed <- b$r_out * pred_sub$r_ch_sim[t] +
+        b$pe_out_v * (pred_sub$r_ch_sim[t] - pred_sub$V_trial_sim[t]) +
+        b$pe_out_q * (pred_sub$r_ch_sim[t] - pred_sub$Q_ch_feed_sim[t]) +
+        b$cc_out * (pred_sub$r_ch_sim[t] - pred_sub$r_unch_sim[t])
+
+      # Generate whichever rating type exists on this trial.
+      if (pred_sub$dec_probe_number_sched[t] != 0) {
+        y <- nuis + rl_dec + rnorm(1, mean = 0, sd = d_resid)
+        pred_sub$dec_rate_sim[t] <- y
+        pred_sub$val_rate_sim[t] <- y
+        prev_sim <- y
+      } else if (pred_sub$feed_probe_number_sched[t] != 0) {
+        y <- nuis + rl_feed + rnorm(1, mean = 0, sd = f_resid)
+        pred_sub$feed_rate_sim[t] <- y
+        pred_sub$val_rate_sim[t] <- y
+        prev_sim <- y
+      } else {
+        pred_sub$val_rate_sim[t] <- prev_sim
+      }
+    }
+
+    # Store subject dataset.
+    out_list[[i]] <- pred_sub
+  }
+
+  # Return one long trial-level simulated dataset.
+  dplyr::bind_rows(out_list)
+}
+
+# Fits recovery models to simulated ratings using OLS with subject fixed effects.
+# This avoids heavier mixed-model fitting while still controlling baseline subject differences.
+fit_recovery_models <- function(sim_df) {
+  # Separate by probe type to match study design and original model structure.
+  dec_df <- sim_df[!is.na(sim_df$dec_rate_sim), , drop = FALSE]
+  feed_df <- sim_df[!is.na(sim_df$feed_rate_sim), , drop = FALSE]
+
+  dec_fit <- stats::lm(
+    dec_rate_sim ~ V_block_sim + Q_ch_dec_sim + Q_unch_dec_sim +
+      block_cent + trial_nl_cent + prev_rate_sim + factor(sub_index),
+    data = dec_df
+  )
+
+  feed_fit <- stats::lm(
+    feed_rate_sim ~ V_trial_sim + Q_ch_feed_sim + r_ch_sim + r_unch_sim +
+      block_cent + trial_nl_cent + prev_rate_sim + factor(sub_index),
+    data = feed_df
+  )
+
+  list(dec_fit = dec_fit, feed_fit = feed_fit)
+}
+
+# Extracts the 7 RL coefficients in the exact order needed by vector_lengths_from_effects.
+extract_effect_vector <- function(fit_list) {
+  dcoef <- stats::coef(fit_list$dec_fit)
+  fcoef <- stats::coef(fit_list$feed_fit)
+
+  c(
+    dcoef["V_block_sim"],
+    dcoef["Q_ch_dec_sim"],
+    dcoef["Q_unch_dec_sim"],
+    fcoef["V_trial_sim"],
+    fcoef["Q_ch_feed_sim"],
+    fcoef["r_ch_sim"],
+    fcoef["r_unch_sim"]
+  )
+}
+
+# Decomposes a 7D RL effect vector into theory vector lengths (R/PE/CC) plus residual.
+# The direction vectors and grouping match the manuscript's vector-based framework.
+# Unlike get_vec_lens(), this decomposes one effect vector (not posterior draws).
+vector_lengths_from_effects <- function(eff_vec) {
+  # Direction vectors in order: Vb, Qcd, Qud, Vt, Qcf, r_ch, r_unch
+  pe_ch <- c(-0.5, 0.5, 0, 0, 0, 0, 0)
+  sv_ch <- c(0, 1, 0, 0, 0, 0, 0)
+  cc_ch <- c(0, 0.5, -0.5, 0, 0, 0, 0)
+  pe_outV <- c(0, 0, 0, -0.5, 0, 0.5, 0)
+  pe_outQ <- c(0, 0, 0, 0, -0.5, 0.5, 0)
+  sv_out <- c(0, 0, 0, 0, 0, 1, 0)
+  cc_out <- c(0, 0, 0, 0, 0, 0.5, -0.5)
+  dvec_mat <- cbind(pe_ch, sv_ch, cc_ch, pe_outV, pe_outQ, sv_out, cc_out)
+
+  ws <- vec_optim(target = eff_vec, dvec = dvec_mat, init_pars = rep(0, 7))
+  mn <- sum(abs(eff_vec))
+  ports <- get_ports(c(ws, mn))
+  names(ports) <- c("pe_ch", "sv_ch", "cc_ch", "pe_outV", "pe_outQ", "sv_out", "cc_out", "resid")
+
+  # Theory-level lengths are sums of their component ports.
+  lens <- c(
+    r = as.numeric(ports["sv_ch"] + ports["sv_out"]),
+    pe = as.numeric(ports["pe_ch"] + ports["pe_outV"] + ports["pe_outQ"]),
+    cc = as.numeric(ports["cc_ch"] + ports["cc_out"]),
+    resid = as.numeric(ports["resid"])
+  )
+  lens[lens < 0] <- 0
+  lens
+}
+
+# Makes dot-cloud panels of recovered lengths with one vertical target marker per theory.
+# length_df should have columns: condition, theory, length
+# ref_df should have columns: condition, theory, target
+plot_vector_recovery <- function(length_df, ref_df, x_limits = c(0, 1)) {
+  # Explicit numeric y mapping keeps ordering stable across all facets.
+  # Residual is always bottom (1), then CC (2), PE (3), Reward (4).
+  theory_key <- data.frame(
+    theory = c("resid", "cc", "pe", "r"),
+    y_id = c(1, 2, 3, 4),
+    y_lab = c("Residual", "CC", "PE", "R"),
+    stringsAsFactors = FALSE
+  )
+
+  condition_levels <- c("reward", "pe", "cc", "blend")
+  condition_labels <- c("Reward", "PE", "CC", "Blend")
+
+  length_plot_df <- length_df |>
+    dplyr::left_join(theory_key, by = "theory") |>
+    dplyr::mutate(
+      condition = factor(condition, levels = condition_levels, labels = condition_labels),
+      theory = factor(theory, levels = c("r", "pe", "cc", "resid"))
+    )
+
+  ref_plot_df <- ref_df |>
+    dplyr::left_join(theory_key, by = "theory") |>
+    dplyr::mutate(
+      condition = factor(condition, levels = condition_levels, labels = condition_labels)
+    )
+
+  # Median x-position per condition x theory row (drawn slightly below the jitter cloud).
+  median_df <- length_plot_df |>
+    dplyr::group_by(condition, theory, y_id) |>
+    dplyr::summarise(length_med = stats::median(length), .groups = "drop")
+
+  p <- ggplot2::ggplot(
+    length_plot_df,
+    ggplot2::aes(x = length, y = y_id)
+  ) +
+    ggplot2::geom_vline(xintercept = 0, color = "black", linewidth = 0.47) +
+    # Draw an explicit x-axis baseline in every facet (including the top row).
+    ggplot2::geom_hline(yintercept = 0.5, color = "black", linewidth = 0.47) +
+    ggplot2::geom_point(
+      ggplot2::aes(color = theory),
+      alpha = 0.22,
+      size = 1.35,
+      shape = 16,
+      position = ggplot2::position_jitter(height = 0.12, width = 0)
+    ) +
+    ggplot2::geom_point(
+      data = median_df,
+      ggplot2::aes(x = length_med, y = y_id - 0.19),
+      inherit.aes = FALSE,
+      shape = 95,
+      size = 2.6,
+      alpha = 0.8,
+      color = "#111111"
+    ) +
+    ggplot2::geom_segment(
+      data = ref_plot_df,
+      ggplot2::aes(x = target, xend = target, y = y_id - 0.24, yend = y_id + 0.24),
+      inherit.aes = FALSE,
+      color = "#d7301f",
+      linewidth = 0.7
+    ) +
+    ggplot2::facet_wrap(~condition, ncol = 2) +
+    ggplot2::coord_cartesian(xlim = x_limits, ylim = c(0.5, 4.5), clip = "off") +
+    ggplot2::scale_y_continuous(
+      breaks = theory_key$y_id,
+      labels = theory_key$y_lab
+    ) +
+    ggplot2::scale_x_continuous(
+      breaks = c(0, 0.25, 0.5, 0.75, 1)
+    ) +
+    ggplot2::scale_color_manual(
+      values = c(r = "#5C9ED6", pe = "#8B5FBF", cc = "#D9534F", resid = "#414141"),
+      guide = "none"
+    ) +
+    ggplot2::labs(x = NULL, y = NULL) +
+    ggplot2::theme_minimal(base_size = 9) +
+    ggplot2::theme(
+      strip.text = ggplot2::element_text(face = "bold"),
+      panel.grid.major.y = ggplot2::element_blank(),
+      panel.grid.minor = ggplot2::element_blank(),
+      panel.grid.major.x = ggplot2::element_line(color = "#DCDCDC", linewidth = 0.47),
+      axis.text.x = ggplot2::element_blank(),
+      axis.text.y = ggplot2::element_blank(),
+      axis.ticks.y = ggplot2::element_blank(),
+      axis.ticks.x = ggplot2::element_blank(),
+      axis.line.x = ggplot2::element_blank(),
+      panel.spacing = grid::unit(0.9, "lines"),
+      plot.background = ggplot2::element_rect(fill = "white", color = NA),
+      panel.background = ggplot2::element_rect(fill = "white", color = NA)
+    )
+
+  p
+}
+
+# Main wrapper for Study 2 vector-length recovery.
+# n_sims is the number of simulations per generating condition.
+# Total simulated datasets = 4 * n_sims (reward, pe, cc, blend).
+run_s2_vector_recovery <- function(
+  trials,
+  model_out_dir,
+  n_sims = 250,
+  seed = 19
+) {
+  set.seed(seed)
+
+  # Ensure required columns exist before expensive looping begins.
+  needed_cols <- c(
+    "sub_index", "decrate_first", "overall_trial_nl", "trial_nl", "block_cent", "trial_nl_cent",
+    "fA_ix", "fB_ix", "choice_numeric", "chosen_frac", "unchosen_frac",
+    "out_a", "out_b", "chosen_out", "unchosen_out"
+  )
+  missing_cols <- setdiff(needed_cols, names(trials))
+  if (length(missing_cols) > 0) {
+    stop(paste0("Missing required trial columns: ", paste(missing_cols, collapse = ", ")))
+  }
+
+  fsml <- read_fsml("combined_shrink", model_out_dir = model_out_dir)
+  sum_df <- fsml$sum
+
+  # Residual SDs used when generating simulated ratings.
+  d_resid <- get_median(sum_df, "d_resid")
+  f_resid <- get_median(sum_df, "f_resid")
+
+  # Build a subject-level scaffold from trial data.
+  # decrate_first is retained because it determines block-effect construction.
+  sub_df <- trials |>
+    dplyr::distinct(sub_index, decrate_first) |>
+    dplyr::arrange(sub_index)
+
+  # Build scheduled (non-skip-dependent) probe numbers for simulation.
+  # Decision ratings are scheduled in one block per subject (determined by decrate_first);
+  # feedback ratings are scheduled in the other block.
+  trials_sim <- trials |>
+    dplyr::arrange(sub_index, overall_trial_nl) |>
+    dplyr::mutate(
+      dec_sched = (decrate_first == 1 & block == 1) | (decrate_first == 0 & block == 2),
+      feed_sched = !dec_sched
+    ) |>
+    dplyr::group_by(sub_index) |>
+    dplyr::mutate(
+      dec_probe_number_sched = ifelse(dec_sched, cumsum(dec_sched), 0L),
+      feed_probe_number_sched = ifelse(feed_sched, cumsum(feed_sched), 0L)
+    ) |>
+    dplyr::ungroup() |>
+    dplyr::select(-dec_sched, -feed_sched)
+
+  conditions <- c("reward", "pe", "cc", "blend")
+  # Pre-allocate list containers for speed; one entry per simulated dataset.
+  results <- vector("list", length = length(conditions) * n_sims)
+  idx <- 1
+
+  for (cond in conditions) {
+    for (sim_i in seq_len(n_sims)) {
+      # 1) Draw subject parameters and condition-specific RL components.
+      subj_params <- s2_draw_subject_params(sum_df = sum_df, sub_df = sub_df)
+      comp_draws <- draw_composite_effects(n_s = nrow(sub_df), condition = cond)
+
+      # 2) Simulate ratings and fit recovery regressions.
+      sim_df <- s2_simulate_affect_dataset(
+        trials = trials_sim,
+        subj_params = subj_params,
+        comp_betas = comp_draws,
+        d_resid = d_resid,
+        f_resid = f_resid
+      )
+
+      fit_list <- fit_recovery_models(sim_df)
+      est_eff <- extract_effect_vector(fit_list)
+      est_len <- vector_lengths_from_effects(est_eff)
+
+      # 3) Store long-format outputs for easy summarization/plotting.
+      results[[idx]] <- data.frame(
+        condition = cond,
+        sim = sim_i,
+        theory = names(est_len),
+        length = as.numeric(est_len),
+        stringsAsFactors = FALSE
+      )
+
+      idx <- idx + 1
+    }
+  }
+
+  # Stitch together outputs and construct plots.
+  est_df <- dplyr::bind_rows(results)
+  # Nominal theory-length targets for reference lines.
+  ref_df <- dplyr::bind_rows(
+    data.frame(condition = "reward", theory = c("r", "pe", "cc", "resid"), target = c(1, 0, 0, 0)),
+    data.frame(condition = "pe", theory = c("r", "pe", "cc", "resid"), target = c(0, 1, 0, 0)),
+    data.frame(condition = "cc", theory = c("r", "pe", "cc", "resid"), target = c(0, 0, 1, 0)),
+    data.frame(condition = "blend", theory = c("r", "pe", "cc", "resid"), target = c(1 / 3, 1 / 3, 1 / 3, 0))
+  )
+  panel_plot <- plot_vector_recovery(length_df = est_df, ref_df = ref_df, x_limits = c(0, 1))
+
+  # Build one single-condition plot per generating condition (reward, pe, cc, blend).
+  plot_list <- lapply(
+    split(est_df, est_df$condition),
+    function(d) {
+      plot_vector_recovery(
+        length_df = d,
+        ref_df = ref_df[ref_df$condition == unique(d$condition), , drop = FALSE],
+        x_limits = c(0, 1)
+      ) + ggplot2::theme(legend.position = "none")
+    }
+  )
+
+  list(
+    estimates = est_df,
+    panel_plot = panel_plot,
+    condition_plots = plot_list
+  )
+}
