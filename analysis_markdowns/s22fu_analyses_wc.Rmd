@@ -1456,21 +1456,22 @@ Simulate datasets under reward theory, PE theory, CC theory, and a combination o
 Then recover vector lengths with OLS (subject fixed effects).
 ```{r}
 rec_dir <- paste0(path_to_project_directory,"output/results/vector_recovery/")
+rec_tag <- "predvec100"
 
 s2_vrec <- run_s2_vector_recovery(
   trials = trials,
   model_out_dir = model_out_dir,
-  n_sims = 250,
+  n_sims = 100,
   seed = 19
 )
 
-write.csv(s2_vrec$estimates,paste0(rec_dir,"s2_vector_recovery_estimates.csv"),row.names=FALSE)
+write.csv(s2_vrec$estimates,paste0(rec_dir,"s2_vector_recovery_",rec_tag,"_estimates.csv"),row.names=FALSE)
 
-ggsave(paste0(fig_dir,"s2_vector_recovery_panel.pdf"),s2_vrec$panel_plot,width=5.5,height=3.8,device=cairo_pdf,bg="white")
-ggsave(paste0(fig_dir,"s2_vector_recovery_reward.pdf"),s2_vrec$condition_plots[["reward"]],width=2.4,height=1.8,device=cairo_pdf,bg="white")
-ggsave(paste0(fig_dir,"s2_vector_recovery_pe.pdf"),s2_vrec$condition_plots[["pe"]],width=2.4,height=1.8,device=cairo_pdf,bg="white")
-ggsave(paste0(fig_dir,"s2_vector_recovery_cc.pdf"),s2_vrec$condition_plots[["cc"]],width=2.4,height=1.8,device=cairo_pdf,bg="white")
-ggsave(paste0(fig_dir,"s2_vector_recovery_blend.pdf"),s2_vrec$condition_plots[["blend"]],width=2.4,height=1.8,device=cairo_pdf,bg="white")
+ggsave(paste0(fig_dir,"s2_vector_recovery_",rec_tag,"_panel.pdf"),s2_vrec$panel_plot,width=5.5,height=3.8,device=cairo_pdf,bg="white")
+ggsave(paste0(fig_dir,"s2_vector_recovery_",rec_tag,"_reward.pdf"),s2_vrec$condition_plots[["reward"]],width=2.4,height=1.8,device=cairo_pdf,bg="white")
+ggsave(paste0(fig_dir,"s2_vector_recovery_",rec_tag,"_pe.pdf"),s2_vrec$condition_plots[["pe"]],width=2.4,height=1.8,device=cairo_pdf,bg="white")
+ggsave(paste0(fig_dir,"s2_vector_recovery_",rec_tag,"_cc.pdf"),s2_vrec$condition_plots[["cc"]],width=2.4,height=1.8,device=cairo_pdf,bg="white")
+ggsave(paste0(fig_dir,"s2_vector_recovery_",rec_tag,"_blend.pdf"),s2_vrec$condition_plots[["blend"]],width=2.4,height=1.8,device=cairo_pdf,bg="white")
 ```
 
 ```{r}
@@ -1479,10 +1480,10 @@ s2_vrec$panel_plot
 
 Rebuild density plots from saved simulation outputs, without rerunning simulations.
 ```{r}
-s2_vrec_replot <- build_vector_recovery_plots_from_file(
-  estimates_file = paste0(rec_dir,"s2_vector_recovery_estimates.csv"),
-  hide_axis_text = TRUE
+replot_dot <- build_vector_recovery_plots_from_file(
+  estimates_file = paste0(rec_dir, "s2_vector_recovery_",rec_tag,"_estimates.csv"),
+  plot_type = "dot"
 )
 
-s2_vrec_replot$panel_plot
+replot_dot$panel_plot
 ```

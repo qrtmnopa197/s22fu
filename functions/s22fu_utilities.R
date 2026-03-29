@@ -309,9 +309,9 @@ draw_composite_effects <- function(n_s, condition) {
   } else if (condition == "blend") {
     out$r_choice <- draw_norm(0.6, 0.2)
     out$r_out <- draw_norm(0.6, 0.2)
-    out$pe_choice <- draw_norm(0.2, 0.067)
-    out$pe_out_v <- draw_norm(0.2, 0.067)
-    out$pe_out_q <- draw_norm(0.2, 0.067)
+    out$pe_choice <- draw_norm(0.3, 0.1)
+    out$pe_out_v <- draw_norm(0.3, 0.1)
+    out$pe_out_q <- draw_norm(0.3, 0.1)
     out$cc_choice <- draw_norm(0.3, 0.1)
     out$cc_out <- draw_norm(0.3, 0.1)
   } else {
@@ -529,7 +529,7 @@ fit_recovery_models <- function(sim_df) {
   list(dec_fit = dec_fit, feed_fit = feed_fit)
 }
 
-# Extracts the 7 RL coefficients in the exact order needed by vector_lengths_from_effects.
+# Extracts the 7 RL coefficients in the exact order needed by prediction_lengths_from_effects.
 extract_effect_vector <- function(fit_list) {
   dcoef <- stats::coef(fit_list$dec_fit)
   fcoef <- stats::coef(fit_list$feed_fit)
@@ -545,10 +545,9 @@ extract_effect_vector <- function(fit_list) {
   )
 }
 
-# Decomposes a 7D RL effect vector into theory vector lengths (R/PE/CC) plus residual.
-# The direction vectors and grouping match the manuscript's vector-based framework.
-# Unlike get_vec_lens(), this decomposes one effect vector (not posterior draws).
-vector_lengths_from_effects <- function(eff_vec) {
+# Decomposes one 7D RL effect vector into prediction-vector lengths plus residual.
+# Unlike get_vec_lens(), this works on one effect vector rather than posterior draws.
+prediction_lengths_from_effects <- function(eff_vec) {
   # Direction vectors in order: Vb, Qcd, Qud, Vt, Qcf, r_ch, r_unch
   pe_ch <- c(-0.5, 0.5, 0, 0, 0, 0, 0)
   sv_ch <- c(0, 1, 0, 0, 0, 0, 0)
@@ -564,24 +563,44 @@ vector_lengths_from_effects <- function(eff_vec) {
   ports <- get_ports(c(ws, mn))
   names(ports) <- c("pe_ch", "sv_ch", "cc_ch", "pe_outV", "pe_outQ", "sv_out", "cc_out", "resid")
 
-  # Theory-level lengths are sums of their component ports.
+  # Prediction-vector lengths (Table 1a style naming).
   lens <- c(
-    r = as.numeric(ports["sv_ch"] + ports["sv_out"]),
-    pe = as.numeric(ports["pe_ch"] + ports["pe_outV"] + ports["pe_outQ"]),
-    cc = as.numeric(ports["cc_ch"] + ports["cc_out"]),
+    r_choice = as.numeric(ports["sv_ch"]),
+    pe_choice = as.numeric(ports["pe_ch"]),
+    cc_choice = as.numeric(ports["cc_ch"]),
+    r_out = as.numeric(ports["sv_out"]),
+    pe_out_q = as.numeric(ports["pe_outQ"]),
+    pe_out_v = as.numeric(ports["pe_outV"]),
+    cc_out = as.numeric(ports["cc_out"]),
     resid = as.numeric(ports["resid"])
   )
   lens[lens < 0] <- 0
   lens
 }
 
-# Returns nominal reference lengths used as target markers in vector-recovery plots.
+# Returns nominal reference lengths used as target markers in prediction-recovery plots.
 vector_recovery_reference_lengths <- function() {
   dplyr::bind_rows(
-    data.frame(condition = "reward", theory = c("r", "pe", "cc", "resid"), target = c(1, 0, 0, 0)),
-    data.frame(condition = "pe", theory = c("r", "pe", "cc", "resid"), target = c(0, 1, 0, 0)),
-    data.frame(condition = "cc", theory = c("r", "pe", "cc", "resid"), target = c(0, 0, 1, 0)),
-    data.frame(condition = "blend", theory = c("r", "pe", "cc", "resid"), target = c(1 / 3, 1 / 3, 1 / 3, 0))
+    data.frame(
+      condition = "reward",
+      prediction = c("r_choice", "pe_choice", "cc_choice", "r_out", "pe_out_q", "pe_out_v", "cc_out", "resid"),
+      target = c(0.5, 0, 0, 0.5, 0, 0, 0, 0)
+    ),
+    data.frame(
+      condition = "pe",
+      prediction = c("r_choice", "pe_choice", "cc_choice", "r_out", "pe_out_q", "pe_out_v", "cc_out", "resid"),
+      target = c(0, 1 / 3, 0, 0, 1 / 3, 1 / 3, 0, 0)
+    ),
+    data.frame(
+      condition = "cc",
+      prediction = c("r_choice", "pe_choice", "cc_choice", "r_out", "pe_out_q", "pe_out_v", "cc_out", "resid"),
+      target = c(0, 0, 0.5, 0, 0, 0, 0.5, 0)
+    ),
+    data.frame(
+      condition = "blend",
+      prediction = c("r_choice", "pe_choice", "cc_choice", "r_out", "pe_out_q", "pe_out_v", "cc_out", "resid"),
+      target = c(1 / 7, 1 / 7, 1 / 7, 1 / 7, 1 / 7, 1 / 7, 1 / 7, 0)
+    )
   )
 }
 
@@ -594,34 +613,34 @@ plot_vector_recovery_dot <- function(
   x_limits = c(0, 1),
   hide_axis_text = TRUE,
   dot_alpha = 0.12,
-  dot_size = 1.35,
+  dot_size = 1.50,
   dot_jitter_height = 0.12
 ) {
-  theory_key <- data.frame(
-    theory = c("resid", "cc", "pe", "r"),
-    y_id = c(1, 2, 3, 4),
-    y_lab = c("Residual", "CC", "PE", "R"),
+  prediction_key <- data.frame(
+    prediction = c("resid", "cc_out", "pe_out_v", "pe_out_q", "r_out", "cc_choice", "pe_choice", "r_choice"),
+    y_id = c(1, 2, 3, 4, 5, 6, 7, 8),
+    y_lab = c("Residual", "CC_out", "PE_out,V", "PE_out,Q", "R_out", "CC_choice", "PE_choice", "R_choice"),
     stringsAsFactors = FALSE
   )
   condition_levels <- c("reward", "pe", "cc", "blend")
   condition_labels <- c("Reward", "PE", "CC", "Blend")
 
   length_plot_df <- length_df |>
-    dplyr::left_join(theory_key, by = "theory") |>
+    dplyr::left_join(prediction_key, by = "prediction") |>
     dplyr::mutate(
-      theory = factor(theory, levels = c("r", "pe", "cc", "resid")),
+      prediction = factor(prediction, levels = c("r_choice", "pe_choice", "cc_choice", "r_out", "pe_out_q", "pe_out_v", "cc_out", "resid")),
       condition = factor(condition, levels = condition_levels, labels = condition_labels)
     )
 
   ref_plot_df <- ref_df |>
-    dplyr::left_join(theory_key, by = "theory") |>
+    dplyr::left_join(prediction_key, by = "prediction") |>
     dplyr::mutate(
       condition = factor(condition, levels = condition_levels, labels = condition_labels)
     )
 
-  # Median x-position per condition x theory row (drawn slightly below cloud).
+  # Median x-position per condition x prediction row (drawn slightly below cloud).
   median_df <- length_plot_df |>
-    dplyr::group_by(condition, theory, y_id) |>
+    dplyr::group_by(condition, prediction, y_id) |>
     dplyr::summarise(length_med = stats::median(length), .groups = "drop")
 
   x_text <- if (hide_axis_text) ggplot2::element_blank() else ggplot2::element_text()
@@ -637,20 +656,25 @@ plot_vector_recovery_dot <- function(
     # Draw an explicit x-axis baseline in every facet (including top row).
     ggplot2::geom_hline(yintercept = 0.5, color = "black", linewidth = 0.47) +
     ggplot2::geom_point(
-      ggplot2::aes(color = theory),
+      ggplot2::aes(color = prediction),
       alpha = dot_alpha,
       size = dot_size,
       shape = 16,
       position = ggplot2::position_jitter(height = dot_jitter_height, width = 0)
     ) +
-    ggplot2::geom_point(
+    ggplot2::geom_segment(
       data = median_df,
-      ggplot2::aes(x = length_med, y = y_id - 0.19),
+      ggplot2::aes(
+        x = length_med - 0.009,
+        xend = length_med + 0.009,
+        y = y_id - 0.19,
+        yend = y_id - 0.19
+      ),
       inherit.aes = FALSE,
-      shape = 95,
-      size = 2.4,
-      alpha = 0.75,
-      color = "#111111"
+      linewidth = 0.6,
+      alpha = 1,
+      color = "#111111",
+      lineend = "round"
     ) +
     # Draw target ticks above points.
     ggplot2::geom_segment(
@@ -663,14 +687,19 @@ plot_vector_recovery_dot <- function(
       alpha = 1
     ) +
     ggplot2::facet_wrap(~condition, ncol = 2) +
-    ggplot2::coord_cartesian(xlim = x_limits, ylim = c(0.5, 4.5), clip = "off") +
+    ggplot2::coord_cartesian(xlim = x_limits, ylim = c(0.5, 8.5), clip = "off") +
     ggplot2::scale_y_continuous(
-      breaks = theory_key$y_id,
-      labels = theory_key$y_lab
+      breaks = prediction_key$y_id,
+      labels = prediction_key$y_lab
     ) +
     ggplot2::scale_x_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)) +
     ggplot2::scale_color_manual(
-      values = c(r = "#5C9ED6", pe = "#8B5FBF", cc = "#D9534F", resid = "#414141"),
+      values = c(
+        r_choice = "#5C9ED6", r_out = "#5C9ED6",
+        pe_choice = "#8B5FBF", pe_out_q = "#8B5FBF", pe_out_v = "#8B5FBF",
+        cc_choice = "#D9534F", cc_out = "#D9534F",
+        resid = "#414141"
+      ),
       guide = "none"
     ) +
     ggplot2::labs(x = NULL, y = NULL) +
@@ -698,21 +727,21 @@ plot_vector_recovery_density <- function(
   x_limits = c(0, 1),
   hide_axis_text = TRUE
 ) {
-  theory_levels <- c("resid", "cc", "pe", "r")
-  theory_labels <- c("Residual", "CC", "PE", "R")
+  prediction_levels <- c("resid", "cc_out", "pe_out_v", "pe_out_q", "r_out", "cc_choice", "pe_choice", "r_choice")
+  prediction_labels <- c("Residual", "CC_out", "PE_out,V", "PE_out,Q", "R_out", "CC_choice", "PE_choice", "R_choice")
   condition_levels <- c("reward", "pe", "cc", "blend")
   condition_labels <- c("Reward", "PE", "CC", "Blend")
 
   length_plot_df <- length_df |>
     dplyr::mutate(
-      theory_raw = theory,
-      theory = factor(theory, levels = theory_levels, labels = theory_labels),
+      prediction_raw = prediction,
+      prediction = factor(prediction, levels = prediction_levels, labels = prediction_labels),
       condition = factor(condition, levels = condition_levels, labels = condition_labels)
     )
 
   ref_plot_df <- ref_df |>
     dplyr::mutate(
-      theory = factor(theory, levels = theory_levels, labels = theory_labels),
+      prediction = factor(prediction, levels = prediction_levels, labels = prediction_labels),
       condition = factor(condition, levels = condition_levels, labels = condition_labels)
     )
 
@@ -723,11 +752,11 @@ plot_vector_recovery_density <- function(
 
   ggplot2::ggplot(
     length_plot_df,
-    ggplot2::aes(x = length, y = theory)
+    ggplot2::aes(x = length, y = prediction)
   ) +
     ggplot2::geom_vline(xintercept = 0, color = "black", linewidth = 0.47) +
     ggplot2::geom_violin(
-      ggplot2::aes(fill = theory_raw),
+      ggplot2::aes(fill = prediction_raw),
       orientation = "y",
       trim = TRUE,
       scale = "width",
@@ -738,7 +767,7 @@ plot_vector_recovery_density <- function(
     ) +
     ggplot2::geom_point(
       data = ref_plot_df,
-      ggplot2::aes(x = target, y = theory),
+      ggplot2::aes(x = target, y = prediction),
       inherit.aes = FALSE,
       shape = 124,
       size = 4.2,
@@ -749,7 +778,12 @@ plot_vector_recovery_density <- function(
     ggplot2::coord_cartesian(xlim = x_limits, clip = "off") +
     ggplot2::scale_x_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)) +
     ggplot2::scale_fill_manual(
-      values = c(r = "#5C9ED6", pe = "#8B5FBF", cc = "#D9534F", resid = "#414141"),
+      values = c(
+        r_choice = "#5C9ED6", r_out = "#5C9ED6",
+        pe_choice = "#8B5FBF", pe_out_q = "#8B5FBF", pe_out_v = "#8B5FBF",
+        cc_choice = "#D9534F", cc_out = "#D9534F",
+        resid = "#414141"
+      ),
       guide = "none"
     ) +
     ggplot2::labs(x = NULL, y = NULL) +
@@ -779,9 +813,11 @@ plot_vector_recovery <- function(
   hide_axis_text = TRUE,
   plot_type = "dot",
   dot_alpha = 0.12,
-  dot_size = 1.35,
+  dot_size = 1.50,
   dot_jitter_height = 0.12
 ) {
+  # Validate/normalize plot_type against the allowed options in c("dot", "density").
+  # This keeps user choices ("dot" or "density") and errors on invalid values.
   plot_type <- match.arg(plot_type, c("dot", "density"))
   if (plot_type == "dot") {
     plot_vector_recovery_dot(
@@ -811,9 +847,10 @@ build_vector_recovery_plots <- function(
   hide_axis_text = TRUE,
   plot_type = "dot",
   dot_alpha = 0.12,
-  dot_size = 1.35,
+  dot_size = 1.50,
   dot_jitter_height = 0.12
 ) {
+  # Validate/normalize plot_type against the allowed options in c("dot", "density").
   plot_type <- match.arg(plot_type, c("dot", "density"))
   panel_plot <- plot_vector_recovery(
     length_df = length_df,
@@ -853,9 +890,10 @@ build_vector_recovery_plots_from_file <- function(
   hide_axis_text = TRUE,
   plot_type = "dot",
   dot_alpha = 0.12,
-  dot_size = 1.35,
+  dot_size = 1.50,
   dot_jitter_height = 0.12
 ) {
+  # Validate/normalize plot_type against the allowed options in c("dot", "density").
   plot_type <- match.arg(plot_type, c("dot", "density"))
   length_df <- utils::read.csv(estimates_file, stringsAsFactors = FALSE)
   build_vector_recovery_plots(
@@ -882,9 +920,10 @@ run_s2_vector_recovery <- function(
   seed = 19,
   plot_type = "dot",
   dot_alpha = 0.12,
-  dot_size = 1.35,
+  dot_size = 1.50,
   dot_jitter_height = 0.12
 ) {
+  # Validate plot_type against the allowed options
   plot_type <- match.arg(plot_type, c("dot", "density"))
   set.seed(seed)
 
@@ -951,13 +990,13 @@ run_s2_vector_recovery <- function(
 
       fit_list <- fit_recovery_models(sim_df)
       est_eff <- extract_effect_vector(fit_list)
-      est_len <- vector_lengths_from_effects(est_eff)
+      est_len <- prediction_lengths_from_effects(est_eff)
 
       # 3) Store long-format outputs for easy summarization/plotting.
       results[[idx]] <- data.frame(
         condition = cond,
         sim = sim_i,
-        theory = names(est_len),
+        prediction = names(est_len),
         length = as.numeric(est_len),
         stringsAsFactors = FALSE
       )
