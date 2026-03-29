@@ -665,8 +665,8 @@ plot_vector_recovery_dot <- function(
     ggplot2::geom_segment(
       data = median_df,
       ggplot2::aes(
-        x = length_med - 0.009,
-        xend = length_med + 0.009,
+        x = length_med - 0.008,
+        xend = length_med + 0.008,
         y = y_id - 0.19,
         yend = y_id - 0.19
       ),
