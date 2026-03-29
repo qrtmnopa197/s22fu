@@ -1474,5 +1474,6 @@ ggsave(paste0(fig_dir,"s2_vector_recovery_blend.pdf"),s2_vrec$condition_plots[["
 ```
 
 ```{r}
-s2_vrec$panel_plot
+s2_vrec$panel_plot +
+  
 ```
