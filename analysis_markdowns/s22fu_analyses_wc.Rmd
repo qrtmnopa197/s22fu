@@ -1474,6 +1474,15 @@ ggsave(paste0(fig_dir,"s2_vector_recovery_blend.pdf"),s2_vrec$condition_plots[["
 ```
 
 ```{r}
-s2_vrec$panel_plot +
-  
+s2_vrec$panel_plot
+```
+
+Rebuild density plots from saved simulation outputs, without rerunning simulations.
+```{r}
+s2_vrec_replot <- build_vector_recovery_plots_from_file(
+  estimates_file = paste0(rec_dir,"s2_vector_recovery_estimates.csv"),
+  hide_axis_text = TRUE
+)
+
+s2_vrec_replot$panel_plot
 ```

@@ -575,27 +575,42 @@ vector_lengths_from_effects <- function(eff_vec) {
   lens
 }
 
-# Makes dot-cloud panels of recovered lengths with one vertical target marker per theory.
-# length_df should have columns: condition, theory, length
-# ref_df should have columns: condition, theory, target
-plot_vector_recovery <- function(length_df, ref_df, x_limits = c(0, 1)) {
-  # Explicit numeric y mapping keeps ordering stable across all facets.
-  # Residual is always bottom (1), then CC (2), PE (3), Reward (4).
+# Returns nominal reference lengths used as target markers in vector-recovery plots.
+vector_recovery_reference_lengths <- function() {
+  dplyr::bind_rows(
+    data.frame(condition = "reward", theory = c("r", "pe", "cc", "resid"), target = c(1, 0, 0, 0)),
+    data.frame(condition = "pe", theory = c("r", "pe", "cc", "resid"), target = c(0, 1, 0, 0)),
+    data.frame(condition = "cc", theory = c("r", "pe", "cc", "resid"), target = c(0, 0, 1, 0)),
+    data.frame(condition = "blend", theory = c("r", "pe", "cc", "resid"), target = c(1 / 3, 1 / 3, 1 / 3, 0))
+  )
+}
+
+# Dot-cloud plot for recovered vector lengths.
+# Uses vertical jitter (only) to reduce overplotting while preserving exact x values.
+# dot_alpha/dot_size/dot_jitter_height control point rendering in dot mode.
+plot_vector_recovery_dot <- function(
+  length_df,
+  ref_df = vector_recovery_reference_lengths(),
+  x_limits = c(0, 1),
+  hide_axis_text = TRUE,
+  dot_alpha = 0.12,
+  dot_size = 1.15,
+  dot_jitter_height = 0.15
+) {
   theory_key <- data.frame(
     theory = c("resid", "cc", "pe", "r"),
     y_id = c(1, 2, 3, 4),
     y_lab = c("Residual", "CC", "PE", "R"),
     stringsAsFactors = FALSE
   )
-
   condition_levels <- c("reward", "pe", "cc", "blend")
   condition_labels <- c("Reward", "PE", "CC", "Blend")
 
   length_plot_df <- length_df |>
     dplyr::left_join(theory_key, by = "theory") |>
     dplyr::mutate(
-      condition = factor(condition, levels = condition_levels, labels = condition_labels),
-      theory = factor(theory, levels = c("r", "pe", "cc", "resid"))
+      theory = factor(theory, levels = c("r", "pe", "cc", "resid")),
+      condition = factor(condition, levels = condition_levels, labels = condition_labels)
     )
 
   ref_plot_df <- ref_df |>
@@ -604,40 +619,47 @@ plot_vector_recovery <- function(length_df, ref_df, x_limits = c(0, 1)) {
       condition = factor(condition, levels = condition_levels, labels = condition_labels)
     )
 
-  # Median x-position per condition x theory row (drawn slightly below the jitter cloud).
+  # Median x-position per condition x theory row (drawn slightly below cloud).
   median_df <- length_plot_df |>
     dplyr::group_by(condition, theory, y_id) |>
     dplyr::summarise(length_med = stats::median(length), .groups = "drop")
 
-  p <- ggplot2::ggplot(
+  x_text <- if (hide_axis_text) ggplot2::element_blank() else ggplot2::element_text()
+  y_text <- if (hide_axis_text) ggplot2::element_blank() else ggplot2::element_text()
+  x_ticks <- if (hide_axis_text) ggplot2::element_blank() else ggplot2::element_line(color = "black", linewidth = 0.47)
+  y_ticks <- if (hide_axis_text) ggplot2::element_blank() else ggplot2::element_blank()
+
+  ggplot2::ggplot(
     length_plot_df,
     ggplot2::aes(x = length, y = y_id)
   ) +
     ggplot2::geom_vline(xintercept = 0, color = "black", linewidth = 0.47) +
-    # Draw an explicit x-axis baseline in every facet (including the top row).
+    # Draw an explicit x-axis baseline in every facet (including top row).
     ggplot2::geom_hline(yintercept = 0.5, color = "black", linewidth = 0.47) +
     ggplot2::geom_point(
       ggplot2::aes(color = theory),
-      alpha = 0.22,
-      size = 1.35,
+      alpha = dot_alpha,
+      size = dot_size,
       shape = 16,
-      position = ggplot2::position_jitter(height = 0.12, width = 0)
+      position = ggplot2::position_jitter(height = dot_jitter_height, width = 0)
     ) +
     ggplot2::geom_point(
       data = median_df,
       ggplot2::aes(x = length_med, y = y_id - 0.19),
       inherit.aes = FALSE,
       shape = 95,
-      size = 2.6,
-      alpha = 0.8,
+      size = 2.4,
+      alpha = 0.75,
       color = "#111111"
     ) +
-    ggplot2::geom_segment(
+    ggplot2::geom_point(
       data = ref_plot_df,
-      ggplot2::aes(x = target, xend = target, y = y_id - 0.24, yend = y_id + 0.24),
+      ggplot2::aes(x = target, y = y_id),
       inherit.aes = FALSE,
-      color = "#d7301f",
-      linewidth = 0.7
+      shape = 124,
+      size = 4.2,
+      stroke = 1.2,
+      color = "#d7301f"
     ) +
     ggplot2::facet_wrap(~condition, ncol = 2) +
     ggplot2::coord_cartesian(xlim = x_limits, ylim = c(0.5, 4.5), clip = "off") +
@@ -645,9 +667,7 @@ plot_vector_recovery <- function(length_df, ref_df, x_limits = c(0, 1)) {
       breaks = theory_key$y_id,
       labels = theory_key$y_lab
     ) +
-    ggplot2::scale_x_continuous(
-      breaks = c(0, 0.25, 0.5, 0.75, 1)
-    ) +
+    ggplot2::scale_x_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)) +
     ggplot2::scale_color_manual(
       values = c(r = "#5C9ED6", pe = "#8B5FBF", cc = "#D9534F", resid = "#414141"),
       guide = "none"
@@ -659,28 +679,212 @@ plot_vector_recovery <- function(length_df, ref_df, x_limits = c(0, 1)) {
       panel.grid.major.y = ggplot2::element_blank(),
       panel.grid.minor = ggplot2::element_blank(),
       panel.grid.major.x = ggplot2::element_line(color = "#DCDCDC", linewidth = 0.47),
-      axis.text.x = ggplot2::element_blank(),
-      axis.text.y = ggplot2::element_blank(),
-      axis.ticks.y = ggplot2::element_blank(),
-      axis.ticks.x = ggplot2::element_blank(),
+      axis.text.x = x_text,
+      axis.text.y = y_text,
+      axis.ticks.x = x_ticks,
+      axis.ticks.y = y_ticks,
       axis.line.x = ggplot2::element_blank(),
       panel.spacing = grid::unit(0.9, "lines"),
       plot.background = ggplot2::element_rect(fill = "white", color = NA),
       panel.background = ggplot2::element_rect(fill = "white", color = NA)
     )
+}
 
-  p
+# Density/violin plot for recovered vector lengths.
+plot_vector_recovery_density <- function(
+  length_df,
+  ref_df = vector_recovery_reference_lengths(),
+  x_limits = c(0, 1),
+  hide_axis_text = TRUE
+) {
+  theory_levels <- c("resid", "cc", "pe", "r")
+  theory_labels <- c("Residual", "CC", "PE", "R")
+  condition_levels <- c("reward", "pe", "cc", "blend")
+  condition_labels <- c("Reward", "PE", "CC", "Blend")
+
+  length_plot_df <- length_df |>
+    dplyr::mutate(
+      theory_raw = theory,
+      theory = factor(theory, levels = theory_levels, labels = theory_labels),
+      condition = factor(condition, levels = condition_levels, labels = condition_labels)
+    )
+
+  ref_plot_df <- ref_df |>
+    dplyr::mutate(
+      theory = factor(theory, levels = theory_levels, labels = theory_labels),
+      condition = factor(condition, levels = condition_levels, labels = condition_labels)
+    )
+
+  x_text <- if (hide_axis_text) ggplot2::element_blank() else ggplot2::element_text()
+  y_text <- if (hide_axis_text) ggplot2::element_blank() else ggplot2::element_text()
+  x_ticks <- if (hide_axis_text) ggplot2::element_blank() else ggplot2::element_line(color = "black", linewidth = 0.47)
+  y_ticks <- if (hide_axis_text) ggplot2::element_blank() else ggplot2::element_line(color = "black", linewidth = 0.47)
+
+  ggplot2::ggplot(
+    length_plot_df,
+    ggplot2::aes(x = length, y = theory)
+  ) +
+    ggplot2::geom_vline(xintercept = 0, color = "black", linewidth = 0.47) +
+    ggplot2::geom_violin(
+      ggplot2::aes(fill = theory_raw),
+      orientation = "y",
+      trim = TRUE,
+      scale = "width",
+      adjust = 1,
+      width = 0.82,
+      alpha = 0.35,
+      color = NA
+    ) +
+    ggplot2::geom_point(
+      data = ref_plot_df,
+      ggplot2::aes(x = target, y = theory),
+      inherit.aes = FALSE,
+      shape = 124,
+      size = 4.2,
+      stroke = 1.2,
+      color = "#d7301f"
+    ) +
+    ggplot2::facet_wrap(~condition, ncol = 2) +
+    ggplot2::coord_cartesian(xlim = x_limits, clip = "off") +
+    ggplot2::scale_x_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1)) +
+    ggplot2::scale_fill_manual(
+      values = c(r = "#5C9ED6", pe = "#8B5FBF", cc = "#D9534F", resid = "#414141"),
+      guide = "none"
+    ) +
+    ggplot2::labs(x = NULL, y = NULL) +
+    ggplot2::theme_minimal(base_size = 9) +
+    ggplot2::theme(
+      strip.text = ggplot2::element_text(face = "bold"),
+      panel.grid.major.y = ggplot2::element_blank(),
+      panel.grid.minor = ggplot2::element_blank(),
+      panel.grid.major.x = ggplot2::element_line(color = "#DCDCDC", linewidth = 0.47),
+      axis.text.x = x_text,
+      axis.text.y = y_text,
+      axis.ticks.x = x_ticks,
+      axis.ticks.y = y_ticks,
+      panel.border = ggplot2::element_rect(fill = NA, color = "black", linewidth = 0.47),
+      panel.spacing = grid::unit(0.9, "lines"),
+      plot.background = ggplot2::element_rect(fill = "white", color = NA),
+      panel.background = ggplot2::element_rect(fill = "white", color = NA)
+    )
+}
+
+# Dispatcher: choose dot-cloud or density rendering.
+# dot_* arguments apply only when plot_type = "dot".
+plot_vector_recovery <- function(
+  length_df,
+  ref_df = vector_recovery_reference_lengths(),
+  x_limits = c(0, 1),
+  hide_axis_text = TRUE,
+  plot_type = "dot",
+  dot_alpha = 0.12,
+  dot_size = 1.15,
+  dot_jitter_height = 0.15
+) {
+  plot_type <- match.arg(plot_type, c("dot", "density"))
+  if (plot_type == "dot") {
+    plot_vector_recovery_dot(
+      length_df = length_df,
+      ref_df = ref_df,
+      x_limits = x_limits,
+      hide_axis_text = hide_axis_text,
+      dot_alpha = dot_alpha,
+      dot_size = dot_size,
+      dot_jitter_height = dot_jitter_height
+    )
+  } else {
+    plot_vector_recovery_density(
+      length_df = length_df,
+      ref_df = ref_df,
+      x_limits = x_limits,
+      hide_axis_text = hide_axis_text
+    )
+  }
+}
+
+# Builds both panel and single-condition plots from a precomputed estimates data frame.
+build_vector_recovery_plots <- function(
+  length_df,
+  ref_df = vector_recovery_reference_lengths(),
+  x_limits = c(0, 1),
+  hide_axis_text = TRUE,
+  plot_type = "dot",
+  dot_alpha = 0.12,
+  dot_size = 1.15,
+  dot_jitter_height = 0.15
+) {
+  plot_type <- match.arg(plot_type, c("dot", "density"))
+  panel_plot <- plot_vector_recovery(
+    length_df = length_df,
+    ref_df = ref_df,
+    x_limits = x_limits,
+    hide_axis_text = hide_axis_text,
+    plot_type = plot_type,
+    dot_alpha = dot_alpha,
+    dot_size = dot_size,
+    dot_jitter_height = dot_jitter_height
+  )
+
+  condition_plots <- lapply(
+    split(length_df, length_df$condition),
+    function(d) {
+      plot_vector_recovery(
+        length_df = d,
+        ref_df = ref_df[ref_df$condition == unique(d$condition), , drop = FALSE],
+        x_limits = x_limits,
+        hide_axis_text = hide_axis_text,
+        plot_type = plot_type,
+        dot_alpha = dot_alpha,
+        dot_size = dot_size,
+        dot_jitter_height = dot_jitter_height
+      ) + ggplot2::theme(legend.position = "none")
+    }
+  )
+
+  list(panel_plot = panel_plot, condition_plots = condition_plots)
+}
+
+# Convenience wrapper: read an estimates CSV and return panel/condition plots.
+build_vector_recovery_plots_from_file <- function(
+  estimates_file,
+  ref_df = vector_recovery_reference_lengths(),
+  x_limits = c(0, 1),
+  hide_axis_text = TRUE,
+  plot_type = "dot",
+  dot_alpha = 0.12,
+  dot_size = 1.15,
+  dot_jitter_height = 0.15
+) {
+  plot_type <- match.arg(plot_type, c("dot", "density"))
+  length_df <- utils::read.csv(estimates_file, stringsAsFactors = FALSE)
+  build_vector_recovery_plots(
+    length_df = length_df,
+    ref_df = ref_df,
+    x_limits = x_limits,
+    hide_axis_text = hide_axis_text,
+    plot_type = plot_type,
+    dot_alpha = dot_alpha,
+    dot_size = dot_size,
+    dot_jitter_height = dot_jitter_height
+  )
 }
 
 # Main wrapper for Study 2 vector-length recovery.
 # n_sims is the number of simulations per generating condition.
 # Total simulated datasets = 4 * n_sims (reward, pe, cc, blend).
+# plot_type controls plotting style for returned figures: "dot" (default) or "density".
+# dot_* arguments pass through to the dot-plot renderer when plot_type = "dot".
 run_s2_vector_recovery <- function(
   trials,
   model_out_dir,
   n_sims = 250,
-  seed = 19
+  seed = 19,
+  plot_type = "dot",
+  dot_alpha = 0.12,
+  dot_size = 1.15,
+  dot_jitter_height = 0.15
 ) {
+  plot_type <- match.arg(plot_type, c("dot", "density"))
   set.seed(seed)
 
   # Ensure required columns exist before expensive looping begins.
@@ -763,30 +967,21 @@ run_s2_vector_recovery <- function(
 
   # Stitch together outputs and construct plots.
   est_df <- dplyr::bind_rows(results)
-  # Nominal theory-length targets for reference lines.
-  ref_df <- dplyr::bind_rows(
-    data.frame(condition = "reward", theory = c("r", "pe", "cc", "resid"), target = c(1, 0, 0, 0)),
-    data.frame(condition = "pe", theory = c("r", "pe", "cc", "resid"), target = c(0, 1, 0, 0)),
-    data.frame(condition = "cc", theory = c("r", "pe", "cc", "resid"), target = c(0, 0, 1, 0)),
-    data.frame(condition = "blend", theory = c("r", "pe", "cc", "resid"), target = c(1 / 3, 1 / 3, 1 / 3, 0))
-  )
-  panel_plot <- plot_vector_recovery(length_df = est_df, ref_df = ref_df, x_limits = c(0, 1))
-
-  # Build one single-condition plot per generating condition (reward, pe, cc, blend).
-  plot_list <- lapply(
-    split(est_df, est_df$condition),
-    function(d) {
-      plot_vector_recovery(
-        length_df = d,
-        ref_df = ref_df[ref_df$condition == unique(d$condition), , drop = FALSE],
-        x_limits = c(0, 1)
-      ) + ggplot2::theme(legend.position = "none")
-    }
+  ref_df <- vector_recovery_reference_lengths()
+  plot_bundle <- build_vector_recovery_plots(
+    length_df = est_df,
+    ref_df = ref_df,
+    x_limits = c(0, 1),
+    hide_axis_text = TRUE,
+    plot_type = plot_type,
+    dot_alpha = dot_alpha,
+    dot_size = dot_size,
+    dot_jitter_height = dot_jitter_height
   )
 
   list(
     estimates = est_df,
-    panel_plot = panel_plot,
-    condition_plots = plot_list
+    panel_plot = plot_bundle$panel_plot,
+    condition_plots = plot_bundle$condition_plots
   )
 }
