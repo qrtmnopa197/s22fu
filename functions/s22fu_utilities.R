@@ -594,8 +594,8 @@ plot_vector_recovery_dot <- function(
   x_limits = c(0, 1),
   hide_axis_text = TRUE,
   dot_alpha = 0.12,
-  dot_size = 1.15,
-  dot_jitter_height = 0.15
+  dot_size = 1.35,
+  dot_jitter_height = 0.12
 ) {
   theory_key <- data.frame(
     theory = c("resid", "cc", "pe", "r"),
@@ -652,14 +652,15 @@ plot_vector_recovery_dot <- function(
       alpha = 0.75,
       color = "#111111"
     ) +
-    ggplot2::geom_point(
+    # Draw target ticks above points.
+    ggplot2::geom_segment(
       data = ref_plot_df,
-      ggplot2::aes(x = target, y = y_id),
+      ggplot2::aes(x = target, xend = target, y = y_id - 0.24, yend = y_id + 0.24),
       inherit.aes = FALSE,
-      shape = 124,
-      size = 4.2,
-      stroke = 1.2,
-      color = "#d7301f"
+      color = "#22A652",
+      linewidth = 0.85,
+      lineend = "round",
+      alpha = 1
     ) +
     ggplot2::facet_wrap(~condition, ncol = 2) +
     ggplot2::coord_cartesian(xlim = x_limits, ylim = c(0.5, 4.5), clip = "off") +
@@ -741,8 +742,8 @@ plot_vector_recovery_density <- function(
       inherit.aes = FALSE,
       shape = 124,
       size = 4.2,
-      stroke = 1.2,
-      color = "#d7301f"
+      stroke = 1.3,
+      color = "#22A652"
     ) +
     ggplot2::facet_wrap(~condition, ncol = 2) +
     ggplot2::coord_cartesian(xlim = x_limits, clip = "off") +
@@ -778,8 +779,8 @@ plot_vector_recovery <- function(
   hide_axis_text = TRUE,
   plot_type = "dot",
   dot_alpha = 0.12,
-  dot_size = 1.15,
-  dot_jitter_height = 0.15
+  dot_size = 1.35,
+  dot_jitter_height = 0.12
 ) {
   plot_type <- match.arg(plot_type, c("dot", "density"))
   if (plot_type == "dot") {
@@ -810,8 +811,8 @@ build_vector_recovery_plots <- function(
   hide_axis_text = TRUE,
   plot_type = "dot",
   dot_alpha = 0.12,
-  dot_size = 1.15,
-  dot_jitter_height = 0.15
+  dot_size = 1.35,
+  dot_jitter_height = 0.12
 ) {
   plot_type <- match.arg(plot_type, c("dot", "density"))
   panel_plot <- plot_vector_recovery(
@@ -852,8 +853,8 @@ build_vector_recovery_plots_from_file <- function(
   hide_axis_text = TRUE,
   plot_type = "dot",
   dot_alpha = 0.12,
-  dot_size = 1.15,
-  dot_jitter_height = 0.15
+  dot_size = 1.35,
+  dot_jitter_height = 0.12
 ) {
   plot_type <- match.arg(plot_type, c("dot", "density"))
   length_df <- utils::read.csv(estimates_file, stringsAsFactors = FALSE)
@@ -881,8 +882,8 @@ run_s2_vector_recovery <- function(
   seed = 19,
   plot_type = "dot",
   dot_alpha = 0.12,
-  dot_size = 1.15,
-  dot_jitter_height = 0.15
+  dot_size = 1.35,
+  dot_jitter_height = 0.12
 ) {
   plot_type <- match.arg(plot_type, c("dot", "density"))
   set.seed(seed)
