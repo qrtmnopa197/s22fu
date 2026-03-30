@@ -491,6 +491,7 @@ raw_eff_intervals<- create_interval_plot(arr = cs_draws,names = c("fpiw_mu[4]","
 raw_eff_intervals_s2 <- raw_eff_intervals
 save(raw_eff_intervals_s2,file="~/Documents/active_manuscripts/s22/figures/raw_eff_intervals_s2.RData")
 ```
+
 ```{r}
 #recode this draws array to match the preregistered formulation of the model
 cs_draws_prereg <- array(NA, dim = c(1000, 4, 7))
@@ -1429,26 +1430,20 @@ mpan_nocac <- fit_stan_model(stan_file = paste0(stan_model_dir_s22fu,"mpan_nocac
 Assess effects of Q and A on choice from the no-autocorrelation choice model posterior.
 ```{r}
 mpan_nocac_scds <- get_draws("mpan_nocac",model_out_dir=model_out_dir,vars=c("scd_beta_mu","scd_aff_sens_mu"))
-quantile(mpan_nocac_scds[,,"scd_beta_mu"],c(.025,.5,.975))
-mean(mpan_nocac_scds[,,"scd_beta_mu"] > 0)
-quantile(mpan_nocac_scds[,,"scd_aff_sens_mu"],c(.025,.5,.975))
-mean(mpan_nocac_scds[,,"scd_aff_sens_mu"] > 0)
-quantile(mpan_nocac_scds[,,"scd_beta_mu"] - mpan_nocac_scds[,,"scd_aff_sens_mu"],c(.025,.5,.975))
-mean(mpan_nocac_scds[,,"scd_beta_mu"] > mpan_nocac_scds[,,"scd_aff_sens_mu"])
+get_ci_pd(draws = mpan_nocac_scds[,,"scd_beta_mu"])
+get_ci_pd(draws = mpan_nocac_scds[,,"scd_aff_sens_mu"])
 ```
 
-Estimate no-autocorrelation vector lengths for reward, prediction error, counterfactual comparison, and residual.
+Estimate no-autocorrelation vector lengths for reward, prediction error, and counterfactual comparison.
 ```{r}
 combined_shrink_nocac_vec_lens <- get_vec_lens("combined_shrink_nocac",vars=c("dpiw_mu","fpiw_mu"),model_out_dir=model_out_dir)
 
-cat("SV\n")
-quantile(combined_shrink_nocac_vec_lens$theor_mn[,,"sv"],c(.025,.5,.975))
+cat("R\n")
+get_ci_pd(draws = combined_shrink_nocac_vec_lens$theor_mn[,,"sv"])
 cat("\nPE\n")
-quantile(combined_shrink_nocac_vec_lens$theor_mn[,,"pe"],c(.025,.5,.975))
+get_ci_pd(draws = combined_shrink_nocac_vec_lens$theor_mn[,,"pe"])
 cat("\nCC\n")
-quantile(combined_shrink_nocac_vec_lens$theor_mn[,,"cc"],c(.025,.5,.975))
-cat("\nResidual\n")
-quantile(combined_shrink_nocac_vec_lens$theor_mn[,,"resid"],c(.025,.5,.975))
+get_ci_pd(draws = combined_shrink_nocac_vec_lens$theor_mn[,,"cc"])
 ```
 
 # Vector-length recovery simulations (Study 2)
@@ -1456,14 +1451,19 @@ Simulate datasets under reward theory, PE theory, CC theory, and a combination o
 Then recover vector lengths with OLS (subject fixed effects).
 ```{r}
 rec_dir <- paste0(path_to_project_directory,"output/results/vector_recovery/")
-rec_tag <- "predvec100"
+rec_tag <- "predvec250"
 
 s2_vrec <- run_s2_vector_recovery(
   trials = trials,
   model_out_dir = model_out_dir,
-  n_sims = 100,
+  n_sims = 250,
   seed = 19
 )
+
+# Percentage of recovered lengths that are zero for vectors simulated with target length 0.
+s2_vrec$zero_off_summary$by_prediction
+s2_vrec$zero_off_summary$by_condition
+s2_vrec$zero_off_summary$overall
 
 write.csv(s2_vrec$estimates,paste0(rec_dir,"s2_vector_recovery_",rec_tag,"_estimates.csv"),row.names=FALSE)
 
@@ -1486,4 +1486,13 @@ replot_dot <- build_vector_recovery_plots_from_file(
 )
 
 replot_dot$panel_plot
+
+zero_off_replot <- summarize_zero_recovery(
+  length_df = read.csv(paste0(rec_dir, "s2_vector_recovery_",rec_tag,"_estimates.csv"), stringsAsFactors = FALSE),
+  include_resid = FALSE
+)
+
+zero_off_replot$by_prediction
+zero_off_replot$by_condition
+zero_off_replot$overall
 ```

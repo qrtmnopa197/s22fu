@@ -271,53 +271,66 @@ s2_draw_subject_params <- function(sum_df, sub_df) {
     )
 }
 
-# Draws subject-level effects of composite predictors for a single generating condition ("composite predictors" 
-# refers to the variables in Table 1a.)
-# Composite-effect columns:
-# r_choice: effect of R_choice (= Q_ch) on post-choice valence
-# pe_choice: effect of PE_choice (= Q_ch - V_block) on post-choice valence
-# cc_choice: effect of CC_choice (= Q_ch - Q_unch) on post-choice valence
-# r_out: effect of R_out (= r_ch) on post-outcome valence
-# pe_out_v: effect of PE_out,V (= r_ch - V_trial) on post-outcome valence
-# pe_out_q: effect of PE_out,Q (= r_ch - Q_ch) on post-outcome valence
-# cc_out: effect of CC_out (= r_ch - r_unch) on post-outcome valence
-# All composite-effect draws are independent.
-draw_composite_effects <- function(n_s, condition) {
-  draw_norm <- function(mu, sd) rnorm(n_s, mean = mu, sd = sd)
+# Returns draws from a normal distribution truncated to [lower, upper].
+draw_trunc_norm <- function(n, mean, sd, lower, upper) {
+  p_low <- stats::pnorm(lower, mean = mean, sd = sd)
+  p_high <- stats::pnorm(upper, mean = mean, sd = sd)
+  u <- stats::runif(n, min = p_low, max = p_high)
+  stats::qnorm(u, mean = mean, sd = sd)
+}
 
-  # Start with all composite effects at 0, then activate condition-specific terms.
-  out <- data.frame(
-    r_choice = rep(0, n_s),
-    r_out = rep(0, n_s),
-    pe_choice = rep(0, n_s),
-    pe_out_v = rep(0, n_s),
-    pe_out_q = rep(0, n_s),
-    cc_choice = rep(0, n_s),
-    cc_out = rep(0, n_s)
+# Returns the 7 prediction direction vectors used in decomposition/recovery.
+# Rows align with RL coefficients in order:
+# V_block, Q_ch_dec, Q_unch_dec, V_trial, Q_ch_feed, r_ch, r_unch.
+prediction_direction_matrix <- function() {
+  pe_ch <- c(-0.5, 0.5, 0, 0, 0, 0, 0)
+  r_ch <- c(0, 1, 0, 0, 0, 0, 0)
+  cc_ch <- c(0, 0.5, -0.5, 0, 0, 0, 0)
+  pe_out_v <- c(0, 0, 0, -0.5, 0, 0.5, 0)
+  pe_out_q <- c(0, 0, 0, 0, -0.5, 0.5, 0)
+  r_out <- c(0, 0, 0, 0, 0, 1, 0)
+  cc_out <- c(0, 0, 0, 0, 0, 0.5, -0.5)
+  cbind(pe_ch, r_ch, cc_ch, pe_out_v, pe_out_q, r_out, cc_out)
+}
+
+# Draws subject-level true prediction-vector lengths for one generating condition.
+# Active prediction vectors are drawn from N(0.5, 0.25), truncated to [0.05, 0.95].
+# Inactive prediction vectors are fixed at 0.
+draw_prediction_lengths <- function(n_s, condition) {
+  pred_names <- c("r_choice", "pe_choice", "cc_choice", "r_out", "pe_out_q", "pe_out_v", "cc_out")
+  out <- as.data.frame(matrix(0, nrow = n_s, ncol = length(pred_names)))
+  names(out) <- pred_names
+
+  active <- switch(
+    condition,
+    reward = c("r_choice", "r_out"),
+    pe = c("pe_choice", "pe_out_q", "pe_out_v"),
+    cc = c("cc_choice", "cc_out"),
+    blend = pred_names,
+    stop(paste0("Unknown condition: ", condition))
   )
 
-  if (condition == "reward") {
-    out$r_choice <- draw_norm(0.6, 0.2)
-    out$r_out <- draw_norm(0.6, 0.2)
-  } else if (condition == "pe") {
-    out$pe_choice <- draw_norm(0.6, 0.2)
-    out$pe_out_v <- draw_norm(0.6, 0.2)
-    out$pe_out_q <- draw_norm(0.6, 0.2)
-  } else if (condition == "cc") {
-    out$cc_choice <- draw_norm(0.6, 0.2)
-    out$cc_out <- draw_norm(0.6, 0.2)
-  } else if (condition == "blend") {
-    out$r_choice <- draw_norm(0.6, 0.2)
-    out$r_out <- draw_norm(0.6, 0.2)
-    out$pe_choice <- draw_norm(0.3, 0.1)
-    out$pe_out_v <- draw_norm(0.3, 0.1)
-    out$pe_out_q <- draw_norm(0.3, 0.1)
-    out$cc_choice <- draw_norm(0.3, 0.1)
-    out$cc_out <- draw_norm(0.3, 0.1)
-  } else {
-    stop(paste0("Unknown condition: ", condition))
+  for (nm in active) {
+    out[[nm]] <- draw_trunc_norm(
+      n = n_s, mean = 0.5, sd = 0.25, lower = 0.05, upper = 0.95
+    )
   }
 
+  out
+}
+
+# Converts prediction-vector lengths to subject-level RL-variable coefficients.
+# Returned columns correspond to the 7 RL predictors used in simulation:
+# V_block, Q_ch_dec, Q_unch_dec, V_trial, Q_ch_feed, r_ch, r_unch.
+prediction_lengths_to_rl_effects <- function(pred_length_df) {
+  pred_order <- c("pe_choice", "r_choice", "cc_choice", "pe_out_v", "pe_out_q", "r_out", "cc_out")
+  dvec_mat <- prediction_direction_matrix()
+  length_mat <- as.matrix(pred_length_df[, c("r_choice", "pe_choice", "cc_choice", "r_out", "pe_out_q", "pe_out_v", "cc_out"), drop = FALSE])
+  length_mat <- length_mat[, pred_order, drop = FALSE]
+  eff_mat <- length_mat %*% t(dvec_mat)
+
+  out <- as.data.frame(eff_mat, stringsAsFactors = FALSE)
+  names(out) <- c("b_v_block", "b_q_ch_dec", "b_q_unch_dec", "b_v_trial", "b_q_ch_feed", "b_r_ch", "b_r_unch")
   out
 }
 
@@ -435,7 +448,7 @@ s2_simulate_predictors_one_subject <- function(
 s2_simulate_affect_dataset <- function(
   trials,
   subj_params,
-  comp_betas,
+  rl_effects,
   d_resid,
   f_resid
 ) {
@@ -445,7 +458,7 @@ s2_simulate_affect_dataset <- function(
   for (i in seq_len(nrow(subj_params))) {
     s <- subj_params$sub_index[i]
     df_sub <- trials[trials$sub_index == s, , drop = FALSE]
-    b <- comp_betas[i, , drop = FALSE]
+    b <- rl_effects[i, , drop = FALSE]
 
     pred_sub <- s2_simulate_predictors_one_subject(
       df_sub = df_sub,
@@ -473,15 +486,15 @@ s2_simulate_affect_dataset <- function(
         subj_params$tr[i] * pred_sub$trial_nl_cent[t] +
         subj_params$pr[i] * prev_sim
 
-      # Theory-relevant RL components written directly as compound predictors.
-      rl_dec <- b$r_choice * pred_sub$Q_ch_dec_sim[t] +
-        b$pe_choice * (pred_sub$Q_ch_dec_sim[t] - pred_sub$V_block_sim[t]) +
-        b$cc_choice * (pred_sub$Q_ch_dec_sim[t] - pred_sub$Q_unch_dec_sim[t])
+      # RL components from subject-specific coefficients implied by prediction-vector lengths.
+      rl_dec <- b$b_v_block * pred_sub$V_block_sim[t] +
+        b$b_q_ch_dec * pred_sub$Q_ch_dec_sim[t] +
+        b$b_q_unch_dec * pred_sub$Q_unch_dec_sim[t]
 
-      rl_feed <- b$r_out * pred_sub$r_ch_sim[t] +
-        b$pe_out_v * (pred_sub$r_ch_sim[t] - pred_sub$V_trial_sim[t]) +
-        b$pe_out_q * (pred_sub$r_ch_sim[t] - pred_sub$Q_ch_feed_sim[t]) +
-        b$cc_out * (pred_sub$r_ch_sim[t] - pred_sub$r_unch_sim[t])
+      rl_feed <- b$b_v_trial * pred_sub$V_trial_sim[t] +
+        b$b_q_ch_feed * pred_sub$Q_ch_feed_sim[t] +
+        b$b_r_ch * pred_sub$r_ch_sim[t] +
+        b$b_r_unch * pred_sub$r_unch_sim[t]
 
       # Generate whichever rating type exists on this trial.
       if (pred_sub$dec_probe_number_sched[t] != 0) {
@@ -545,36 +558,27 @@ extract_effect_vector <- function(fit_list) {
   )
 }
 
-# Decomposes one 7D RL effect vector into prediction-vector lengths plus residual.
+# Decomposes one 7D RL effect vector into raw prediction-vector lengths plus residual.
 # Unlike get_vec_lens(), this works on one effect vector rather than posterior draws.
 prediction_lengths_from_effects <- function(eff_vec) {
-  # Direction vectors in order: Vb, Qcd, Qud, Vt, Qcf, r_ch, r_unch
-  pe_ch <- c(-0.5, 0.5, 0, 0, 0, 0, 0)
-  sv_ch <- c(0, 1, 0, 0, 0, 0, 0)
-  cc_ch <- c(0, 0.5, -0.5, 0, 0, 0, 0)
-  pe_outV <- c(0, 0, 0, -0.5, 0, 0.5, 0)
-  pe_outQ <- c(0, 0, 0, 0, -0.5, 0.5, 0)
-  sv_out <- c(0, 0, 0, 0, 0, 1, 0)
-  cc_out <- c(0, 0, 0, 0, 0, 0.5, -0.5)
-  dvec_mat <- cbind(pe_ch, sv_ch, cc_ch, pe_outV, pe_outQ, sv_out, cc_out)
+  dvec_mat <- prediction_direction_matrix()
 
   ws <- vec_optim(target = eff_vec, dvec = dvec_mat, init_pars = rep(0, 7))
-  mn <- sum(abs(eff_vec))
-  ports <- get_ports(c(ws, mn))
-  names(ports) <- c("pe_ch", "sv_ch", "cc_ch", "pe_outV", "pe_outQ", "sv_out", "cc_out", "resid")
+  resid_raw <- sum(abs(eff_vec)) - sum(ws)
+  raw_lengths <- c(ws, resid_raw)
+  names(raw_lengths) <- c("pe_ch", "r_ch", "cc_ch", "pe_out_v", "pe_out_q", "r_out", "cc_out", "resid")
 
-  # Prediction-vector lengths (Table 1a style naming).
+  # Raw prediction-vector lengths
   lens <- c(
-    r_choice = as.numeric(ports["sv_ch"]),
-    pe_choice = as.numeric(ports["pe_ch"]),
-    cc_choice = as.numeric(ports["cc_ch"]),
-    r_out = as.numeric(ports["sv_out"]),
-    pe_out_q = as.numeric(ports["pe_outQ"]),
-    pe_out_v = as.numeric(ports["pe_outV"]),
-    cc_out = as.numeric(ports["cc_out"]),
-    resid = as.numeric(ports["resid"])
+    r_choice = as.numeric(raw_lengths["r_ch"]),
+    pe_choice = as.numeric(raw_lengths["pe_ch"]),
+    cc_choice = as.numeric(raw_lengths["cc_ch"]),
+    r_out = as.numeric(raw_lengths["r_out"]),
+    pe_out_q = as.numeric(raw_lengths["pe_out_q"]),
+    pe_out_v = as.numeric(raw_lengths["pe_out_v"]),
+    cc_out = as.numeric(raw_lengths["cc_out"]),
+    resid = as.numeric(raw_lengths["resid"])
   )
-  lens[lens < 0] <- 0
   lens
 }
 
@@ -589,7 +593,7 @@ vector_recovery_reference_lengths <- function() {
     data.frame(
       condition = "pe",
       prediction = c("r_choice", "pe_choice", "cc_choice", "r_out", "pe_out_q", "pe_out_v", "cc_out", "resid"),
-      target = c(0, 1 / 3, 0, 0, 1 / 3, 1 / 3, 0, 0)
+      target = c(0, 0.5, 0, 0, 0.5, 0.5, 0, 0)
     ),
     data.frame(
       condition = "cc",
@@ -599,7 +603,7 @@ vector_recovery_reference_lengths <- function() {
     data.frame(
       condition = "blend",
       prediction = c("r_choice", "pe_choice", "cc_choice", "r_out", "pe_out_q", "pe_out_v", "cc_out", "resid"),
-      target = c(1 / 7, 1 / 7, 1 / 7, 1 / 7, 1 / 7, 1 / 7, 1 / 7, 0)
+      target = c(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0)
     )
   )
 }
@@ -612,7 +616,7 @@ plot_vector_recovery_dot <- function(
   ref_df = vector_recovery_reference_lengths(),
   x_limits = c(0, 1),
   hide_axis_text = TRUE,
-  dot_alpha = 0.12,
+  dot_alpha = 0.06,
   dot_size = 1.50,
   dot_jitter_height = 0.12
 ) {
@@ -662,19 +666,16 @@ plot_vector_recovery_dot <- function(
       shape = 16,
       position = ggplot2::position_jitter(height = dot_jitter_height, width = 0)
     ) +
-    ggplot2::geom_segment(
+    ggplot2::geom_point(
       data = median_df,
-      ggplot2::aes(
-        x = length_med - 0.008,
-        xend = length_med + 0.008,
-        y = y_id - 0.19,
-        yend = y_id - 0.19
-      ),
+      ggplot2::aes(x = length_med, y = y_id - 0.19),
       inherit.aes = FALSE,
-      linewidth = 0.6,
+      shape = 23,
+      size = 1.7,
+      stroke = 0.45,
       alpha = 1,
-      color = "#111111",
-      lineend = "round"
+      fill = "white",
+      color = "black"
     ) +
     # Draw target ticks above points.
     ggplot2::geom_segment(
@@ -812,7 +813,7 @@ plot_vector_recovery <- function(
   x_limits = c(0, 1),
   hide_axis_text = TRUE,
   plot_type = "dot",
-  dot_alpha = 0.12,
+  dot_alpha = 0.06,
   dot_size = 1.50,
   dot_jitter_height = 0.12
 ) {
@@ -846,7 +847,7 @@ build_vector_recovery_plots <- function(
   x_limits = c(0, 1),
   hide_axis_text = TRUE,
   plot_type = "dot",
-  dot_alpha = 0.12,
+  dot_alpha = 0.06,
   dot_size = 1.50,
   dot_jitter_height = 0.12
 ) {
@@ -889,7 +890,7 @@ build_vector_recovery_plots_from_file <- function(
   x_limits = c(0, 1),
   hide_axis_text = TRUE,
   plot_type = "dot",
-  dot_alpha = 0.12,
+  dot_alpha = 0.06,
   dot_size = 1.50,
   dot_jitter_height = 0.12
 ) {
@@ -908,6 +909,75 @@ build_vector_recovery_plots_from_file <- function(
   )
 }
 
+# Summarizes how often recovered lengths are exactly zero
+# for predictions whose true target length is zero.
+#
+# length_df:
+#   Long-format output with columns condition, prediction, and length.
+#   This comes from run_s2_vector_recovery()$estimates or a saved estimates CSV.
+# ref_df:
+#   Reference target table from vector_recovery_reference_lengths().
+# include_resid:
+#   If FALSE, the residual row is excluded from zero-recovery summaries.
+summarize_zero_recovery <- function(
+  length_df,
+  ref_df = vector_recovery_reference_lengths(),
+  include_resid = FALSE
+) {
+  # Keep only prediction rows whose true target length is zero.
+  zero_targets <- ref_df |>
+    dplyr::filter(target == 0)
+
+  # Optionally remove residual from evaluation.
+  if (!include_resid) {
+    zero_targets <- zero_targets |>
+      dplyr::filter(prediction != "resid")
+  }
+
+  # Restrict recovered draws to zero-target prediction rows
+  # and create an indicator for "recovered as exactly zero".
+  check_df <- length_df |>
+    dplyr::inner_join(
+      zero_targets[, c("condition", "prediction"), drop = FALSE],
+      by = c("condition", "prediction")
+    ) |>
+    dplyr::mutate(is_zero = length == 0)
+
+  # Summary 1: percentage recovered as zero within each condition x prediction row.
+  by_prediction <- check_df |>
+    dplyr::group_by(condition, prediction) |>
+    dplyr::summarise(
+      n = dplyr::n(),
+      n_zero = sum(is_zero),
+      pct_zero = 100 * mean(is_zero),
+      .groups = "drop"
+    )
+
+  # Summary 2: percentage recovered as zero pooled across predictions within each condition.
+  by_condition <- check_df |>
+    dplyr::group_by(condition) |>
+    dplyr::summarise(
+      n = dplyr::n(),
+      n_zero = sum(is_zero),
+      pct_zero = 100 * mean(is_zero),
+      .groups = "drop"
+    )
+
+  # Summary 3: percentage recovered as zero pooled across all evaluated rows.
+  overall <- check_df |>
+    dplyr::summarise(
+      n = dplyr::n(),
+      n_zero = sum(is_zero),
+      pct_zero = 100 * mean(is_zero)
+    )
+
+  list(
+    by_prediction = by_prediction,
+    by_condition = by_condition,
+    overall = overall
+  )
+}
+
 # Main wrapper for Study 2 vector-length recovery.
 # n_sims is the number of simulations per generating condition.
 # Total simulated datasets = 4 * n_sims (reward, pe, cc, blend).
@@ -919,7 +989,7 @@ run_s2_vector_recovery <- function(
   n_sims = 250,
   seed = 19,
   plot_type = "dot",
-  dot_alpha = 0.12,
+  dot_alpha = 0.06,
   dot_size = 1.50,
   dot_jitter_height = 0.12
 ) {
@@ -975,15 +1045,16 @@ run_s2_vector_recovery <- function(
 
   for (cond in conditions) {
     for (sim_i in seq_len(n_sims)) {
-      # 1) Draw subject parameters and condition-specific RL components.
+      # 1) Draw subject parameters and condition-specific true prediction lengths.
       subj_params <- s2_draw_subject_params(sum_df = sum_df, sub_df = sub_df)
-      comp_draws <- draw_composite_effects(n_s = nrow(sub_df), condition = cond)
+      pred_len_draws <- draw_prediction_lengths(n_s = nrow(sub_df), condition = cond)
+      rl_effect_draws <- prediction_lengths_to_rl_effects(pred_len_draws)
 
       # 2) Simulate ratings and fit recovery regressions.
       sim_df <- s2_simulate_affect_dataset(
         trials = trials_sim,
         subj_params = subj_params,
-        comp_betas = comp_draws,
+        rl_effects = rl_effect_draws,
         d_resid = d_resid,
         f_resid = f_resid
       )
@@ -1018,9 +1089,15 @@ run_s2_vector_recovery <- function(
     dot_size = dot_size,
     dot_jitter_height = dot_jitter_height
   )
+  zero_summary <- summarize_zero_recovery(
+    length_df = est_df,
+    ref_df = ref_df,
+    include_resid = FALSE
+  )
 
   list(
     estimates = est_df,
+    zero_off_summary = zero_summary,
     panel_plot = plot_bundle$panel_plot,
     condition_plots = plot_bundle$condition_plots
   )
