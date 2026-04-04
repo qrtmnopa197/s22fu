@@ -1496,3 +1496,17 @@ zero_off_replot$by_prediction
 zero_off_replot$by_condition
 zero_off_replot$overall
 ```
+
+
+```{r}
+counter <- 0
+for(i in 1:1000){
+  test <- prediction_lengths_from_effects(c(-1,1,0,-1,-1,2,0))
+  if(all(test[c(1, 3, 4, 7)] == 0)){
+    counter <- counter + 1
+  }
+}
+counter
+
+```
+
