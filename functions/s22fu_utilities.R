@@ -1081,7 +1081,13 @@ run_s2_vector_recovery <- function(
   )
   missing_cols <- setdiff(needed_cols, names(trials))
   if (length(missing_cols) > 0) {
-    stop(paste0("Missing required trial columns: ", paste(missing_cols, collapse = ", ")))
+    stop(
+      paste0(
+        "run_s2_outcome_theory_recovery() expects the transformed Study 2 trials object ",
+        "used in the analysis Rmd. Missing required columns: ",
+        paste(missing_cols, collapse = ", ")
+      )
+    )
   }
 
   fsml <- read_fsml("combined_shrink", model_out_dir = model_out_dir)
@@ -1170,5 +1176,392 @@ run_s2_vector_recovery <- function(
     estimates = est_df,
     panel_plot = plot_bundle$panel_plot,
     condition_plots = plot_bundle$condition_plots
+  )
+}
+
+# Draw subject-level outcome-time basis effects where valence depends on
+# r_ch, Q_ch, and r_unch, but not on PE or CC theory vectors.
+draw_outcome_theory_basis_effects <- function(
+  n_s,
+  r_ch_mean = 0.5,
+  r_ch_sd = 0.2,
+  q_ch_mean = 0.25,
+  q_ch_sd = 0.1,
+  r_unch_mean = 0.25,
+  r_unch_sd = 0.1
+) {
+  data.frame(
+    b_v_block = rep(0, n_s),
+    b_q_ch_dec = rep(0, n_s),
+    b_q_unch_dec = rep(0, n_s),
+    b_v_trial = rep(0, n_s),
+    b_q_ch_feed = rnorm(n_s, mean = q_ch_mean, sd = q_ch_sd),
+    b_r_ch = rnorm(n_s, mean = r_ch_mean, sd = r_ch_sd),
+    b_r_unch = rnorm(n_s, mean = r_unch_mean, sd = r_unch_sd),
+    stringsAsFactors = FALSE
+  )
+}
+
+# Return the reward, PE, and CC theory vectors in the reduced outcome-only basis.
+outcome_theory_direction_matrix <- function() {
+  reward <- c(0, 1, 0)
+  pe <- c(-0.5, 0.5, 0)
+  cc <- c(0, 0.5, -0.5)
+  cbind(reward, pe, cc)
+}
+
+# Recover non-negative theory lengths from a 3D outcome effect vector.
+outcome_theory_lengths_from_effects <- function(eff_vec) {
+  dvec_mat <- outcome_theory_direction_matrix()
+  ws <- vec_optim(target = eff_vec, dvec = dvec_mat, init_pars = rep(0, 3))
+  names(ws) <- c("reward", "pe", "cc")
+  ws
+}
+
+# Fit the simplified aggregated-variable and basis-variable recovery models.
+fit_outcome_theory_recovery_models <- function(sim_df) {
+  feed_df <- sim_df[!is.na(sim_df$feed_rate_sim), , drop = FALSE]
+
+  # Table 1a aggregated predictors for the outcome-rating model.
+  feed_df$R_out_sim <- feed_df$r_ch_sim
+  feed_df$PE_out_q_sim <- feed_df$r_ch_sim - feed_df$Q_ch_feed_sim
+  feed_df$CC_out_sim <- feed_df$r_ch_sim - feed_df$r_unch_sim
+
+  # Recover theory-level coefficients directly from the aggregated predictors.
+  aggregated_fit <- stats::lm(
+    feed_rate_sim ~ R_out_sim + PE_out_q_sim + CC_out_sim +
+      block_cent + trial_nl_cent + prev_rate_sim + factor(sub_index),
+    data = feed_df
+  )
+
+  # Recover the basis-variable effects that will later be decomposed into theory lengths.
+  basis_fit <- stats::lm(
+    feed_rate_sim ~ Q_ch_feed_sim + r_ch_sim + r_unch_sim +
+      block_cent + trial_nl_cent + prev_rate_sim + factor(sub_index),
+    data = feed_df
+  )
+
+  list(aggregated_fit = aggregated_fit, basis_fit = basis_fit)
+}
+
+# Convert the two recovery fits into comparable theory-level estimates.
+extract_outcome_theory_recovery <- function(fit_list) {
+  aggregated_coef <- stats::coef(fit_list$aggregated_fit)
+  basis_coef <- stats::coef(fit_list$basis_fit)
+
+  aggregated_est <- c(
+    as.numeric(aggregated_coef["R_out_sim"]),
+    as.numeric(aggregated_coef["PE_out_q_sim"]),
+    as.numeric(aggregated_coef["CC_out_sim"])
+  )
+  names(aggregated_est) <- c("reward", "pe", "cc")
+
+  basis_eff <- c(
+    basis_coef["Q_ch_feed_sim"],
+    basis_coef["r_ch_sim"],
+    basis_coef["r_unch_sim"]
+  )
+
+  vector_est <- outcome_theory_lengths_from_effects(basis_eff)
+
+  list(
+    aggregated = aggregated_est,
+    vector = vector_est
+  )
+}
+
+# Return the theory-level targets shown as green ticks in the recovery plots.
+outcome_theory_recovery_targets <- function() {
+  dplyr::bind_rows(
+    data.frame(
+      approach = "aggregated",
+      theory = c("reward", "pe", "cc"),
+      target = c(0.5, 0, 0)
+    ),
+    data.frame(
+      approach = "vector",
+      theory = c("reward", "pe", "cc"),
+      target = c(0.5, 0, 0)
+    )
+  )
+}
+
+# Plot one manuscript-style dot cloud for either the aggregated or vector recovery.
+plot_outcome_theory_recovery <- function(
+  est_df,
+  target_df = outcome_theory_recovery_targets(),
+  approach_name = c("aggregated", "vector"),
+  x_limits = c(-0.45, 1.2),
+  hide_axis_text = FALSE,
+  dot_alpha = 0.08,
+  dot_size = 1.7,
+  dot_jitter_height = 0.11
+) {
+  approach_name <- match.arg(approach_name, c("aggregated", "vector"))
+
+  # Order theories bottom-to-top as CC, PE, R to match the final figure labels.
+  theory_key <- data.frame(
+    theory = c("cc", "pe", "reward"),
+    y_id = c(1, 2, 3),
+    y_lab = c("CC", "PE", "R"),
+    stringsAsFactors = FALSE
+  )
+
+  plot_df <- est_df |>
+    dplyr::filter(approach == approach_name) |>
+    dplyr::left_join(theory_key, by = "theory")
+
+  target_plot_df <- target_df |>
+    dplyr::filter(approach == approach_name) |>
+    dplyr::left_join(theory_key, by = "theory")
+
+  if (any(is.na(plot_df$y_id))) {
+    bad_theories <- unique(plot_df$theory[is.na(plot_df$y_id)])
+    stop(
+      paste0(
+        "Unknown theory label(s) in est_df: ",
+        paste(bad_theories, collapse = ", ")
+      )
+    )
+  }
+
+  # Draw the medians slightly below the point clouds so they read as summaries, not data points.
+  median_df <- plot_df |>
+    dplyr::group_by(theory, y_id) |>
+    dplyr::summarise(estimate_med = stats::median(estimate), .groups = "drop")
+
+  x_text <- if (hide_axis_text) ggplot2::element_blank() else ggplot2::element_text()
+  y_text <- if (hide_axis_text) ggplot2::element_blank() else ggplot2::element_text()
+  x_ticks <- if (hide_axis_text) ggplot2::element_blank() else ggplot2::element_line(color = "black", linewidth = 0.47)
+  y_ticks <- if (hide_axis_text) ggplot2::element_blank() else ggplot2::element_blank()
+
+  ggplot2::ggplot(
+    plot_df,
+    ggplot2::aes(x = estimate, y = y_id)
+  ) +
+    ggplot2::geom_vline(xintercept = 0, color = "black", linewidth = 0.47) +
+    ggplot2::geom_hline(yintercept = 0.5, color = "black", linewidth = 0.47) +
+    ggplot2::geom_point(
+      ggplot2::aes(color = theory),
+      alpha = dot_alpha,
+      size = dot_size,
+      shape = 16,
+      position = ggplot2::position_jitter(height = dot_jitter_height, width = 0)
+    ) +
+    ggplot2::geom_point(
+      data = median_df,
+      ggplot2::aes(x = estimate_med, y = y_id - 0.18),
+      inherit.aes = FALSE,
+      shape = 23,
+      size = 1.8,
+      stroke = 0.45,
+      alpha = 1,
+      fill = "white",
+      color = "black"
+    ) +
+    ggplot2::geom_segment(
+      data = target_plot_df,
+      ggplot2::aes(x = target, xend = target, y = y_id - 0.23, yend = y_id + 0.23),
+      inherit.aes = FALSE,
+      color = "#22A652",
+      linewidth = 0.85,
+      lineend = "round",
+      alpha = 1
+    ) +
+    ggplot2::coord_cartesian(xlim = x_limits, ylim = c(0.5, 3.5), clip = "off") +
+    ggplot2::scale_y_continuous(
+      breaks = theory_key$y_id,
+      labels = theory_key$y_lab
+    ) +
+    ggplot2::scale_x_continuous(breaks = c(-0.25, 0, 0.25, 0.5, 0.75, 1.0)) +
+    ggplot2::scale_color_manual(
+      values = c(
+        reward = "#5C9ED6",
+        pe = "#8B5FBF",
+        cc = "#D9534F"
+      ),
+      guide = "none"
+    ) +
+    ggplot2::labs(x = NULL, y = NULL) +
+    ggplot2::theme_minimal(base_size = 9) +
+    ggplot2::theme(
+      panel.grid.major.y = ggplot2::element_blank(),
+      panel.grid.minor = ggplot2::element_blank(),
+      panel.grid.major.x = ggplot2::element_line(color = "#DCDCDC", linewidth = 0.47),
+      axis.text.x = x_text,
+      axis.text.y = y_text,
+      axis.ticks.x = x_ticks,
+      axis.ticks.y = y_ticks,
+      axis.line.x = ggplot2::element_blank(),
+      plot.background = ggplot2::element_rect(fill = "white", color = NA),
+      panel.background = ggplot2::element_rect(fill = "white", color = NA)
+    )
+}
+
+# Build the pair of recovery plots returned by the simplified simulation wrapper.
+build_outcome_theory_recovery_plots <- function(
+  est_df,
+  target_df = outcome_theory_recovery_targets(),
+  x_limits = c(-0.45, 1.2),
+  hide_axis_text = FALSE,
+  dot_alpha = 0.08,
+  dot_size = 1.7,
+  dot_jitter_height = 0.11
+) {
+  list(
+    aggregated_plot = plot_outcome_theory_recovery(
+      est_df = est_df,
+      target_df = target_df,
+      approach_name = "aggregated",
+      x_limits = x_limits,
+      hide_axis_text = hide_axis_text,
+      dot_alpha = dot_alpha,
+      dot_size = dot_size,
+      dot_jitter_height = dot_jitter_height
+    ),
+    vector_plot = plot_outcome_theory_recovery(
+      est_df = est_df,
+      target_df = target_df,
+      approach_name = "vector",
+      x_limits = x_limits,
+      hide_axis_text = hide_axis_text,
+      dot_alpha = dot_alpha,
+      dot_size = dot_size,
+      dot_jitter_height = dot_jitter_height
+    )
+  )
+}
+
+# Simulate data where valence depends on pos. effects of r_ch, Q_ch, and r_unch, then compare
+# aggregated-variable recovery to vector recovery on that same generated data.
+run_s2_outcome_theory_recovery <- function(
+  trials,
+  model_out_dir,
+  n_sims = 100,
+  seed = 19,
+  r_ch_mean = 0.5,
+  r_ch_sd = 0.2,
+  q_ch_mean = 0.25,
+  q_ch_sd = 0.1,
+  r_unch_mean = 0.25,
+  r_unch_sd = 0.1,
+  x_limits = c(-0.45, 1.2),
+  hide_axis_text = FALSE,
+  dot_alpha = 0.08,
+  dot_size = 1.7,
+  dot_jitter_height = 0.11
+) {
+  set.seed(seed)
+
+  # Check that the Study 2 trial scaffold contains the columns the simulator needs.
+  needed_cols <- c(
+    "sub_index", "decrate_first", "overall_trial_nl", "trial_nl", "block", "block_cent", "trial_nl_cent",
+    "fA_ix", "fB_ix", "out_a", "out_b"
+  )
+  missing_cols <- setdiff(needed_cols, names(trials))
+  if (length(missing_cols) > 0) {
+    stop(paste0("Missing required trial columns: ", paste(missing_cols, collapse = ", ")))
+  }
+
+  # Reuse the fitted Study 2 model to anchor nuisance parameters and residual noise.
+  fsml <- read_fsml("combined_shrink", model_out_dir = model_out_dir)
+  sum_df <- fsml$sum
+
+  d_resid <- get_median(sum_df, "d_resid")
+  f_resid <- get_median(sum_df, "f_resid")
+
+  # Build the subject scaffold used for drawing subject-level parameters.
+  sub_df <- trials |>
+    dplyr::distinct(sub_index, decrate_first) |>
+    dplyr::arrange(sub_index)
+
+  # Recreate the scheduled decision and feedback probe structure from Study 2.
+  trials_sim <- trials |>
+    dplyr::arrange(sub_index, overall_trial_nl) |>
+    dplyr::mutate(
+      dec_sched = (decrate_first == 1 & block == 1) | (decrate_first == 0 & block == 2),
+      feed_sched = !dec_sched
+    ) |>
+    dplyr::group_by(sub_index) |>
+    dplyr::mutate(
+      dec_probe_number_sched = ifelse(dec_sched, cumsum(dec_sched), 0L),
+      feed_probe_number_sched = ifelse(feed_sched, cumsum(feed_sched), 0L)
+    ) |>
+    dplyr::ungroup() |>
+    dplyr::select(-dec_sched, -feed_sched)
+
+  # Store one row block per recovery approach for each simulated dataset.
+  results <- vector("list", length = n_sims * 2)
+  idx <- 1
+
+  for (sim_i in seq_len(n_sims)) {
+    # Draw non-RL subject parameters from the fitted Study 2 model.
+    subj_params <- s2_draw_subject_params(sum_df = sum_df, sub_df = sub_df)
+
+    # Draw the outcome-time basis effects around the fixed population means.
+    rl_effect_draws <- draw_outcome_theory_basis_effects(
+      n_s = nrow(sub_df),
+      r_ch_mean = r_ch_mean,
+      r_ch_sd = r_ch_sd,
+      q_ch_mean = q_ch_mean,
+      q_ch_sd = q_ch_sd,
+      r_unch_mean = r_unch_mean,
+      r_unch_sd = r_unch_sd
+    )
+
+    # Simulate one full dataset under those subject-level effects.
+    sim_df <- s2_simulate_affect_dataset(
+      trials = trials_sim,
+      subj_params = subj_params,
+      rl_effects = rl_effect_draws,
+      d_resid = d_resid,
+      f_resid = f_resid
+    )
+
+    # Fit both recovery approaches to the same simulated dataset.
+    recovery <- extract_outcome_theory_recovery(
+      fit_list = fit_outcome_theory_recovery_models(sim_df)
+    )
+
+    # Save the aggregated-variable recovery in long format for plotting.
+    results[[idx]] <- data.frame(
+      approach = "aggregated",
+      sim = sim_i,
+      theory = names(recovery$aggregated),
+      estimate = as.numeric(recovery$aggregated),
+      stringsAsFactors = FALSE
+    )
+    idx <- idx + 1
+
+    # Save the vector-based recovery in the same long format.
+    results[[idx]] <- data.frame(
+      approach = "vector",
+      sim = sim_i,
+      theory = names(recovery$vector),
+      estimate = as.numeric(recovery$vector),
+      stringsAsFactors = FALSE
+    )
+    idx <- idx + 1
+  }
+
+  est_df <- dplyr::bind_rows(results)
+  target_df <- outcome_theory_recovery_targets()
+
+  # Build the final plots after combining all simulation outputs.
+  plot_bundle <- build_outcome_theory_recovery_plots(
+    est_df = est_df,
+    target_df = target_df,
+    x_limits = x_limits,
+    hide_axis_text = hide_axis_text,
+    dot_alpha = dot_alpha,
+    dot_size = dot_size,
+    dot_jitter_height = dot_jitter_height
+  )
+
+  list(
+    estimates = est_df,
+    targets = target_df,
+    aggregated_plot = plot_bundle$aggregated_plot,
+    vector_plot = plot_bundle$vector_plot
   )
 }
