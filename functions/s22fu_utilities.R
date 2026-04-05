@@ -978,38 +978,80 @@ summarize_zero_recovery <- function(
   )
 }
 
-# For vectors with true target length 0, checks whether the recovered median is exactly 0.
-# include_resid: if FALSE, excludes the residual row.
-summarize_zero_target_medians <- function(
+# Summarizes over/under/exact recovery relative to true target lengths.
+# This is useful for reporting directional recovery patterns, such as whether
+# positive target lengths are more often underestimated than overestimated.
+summarize_over_under_recovery <- function(
   length_df,
-  ref_df = vector_recovery_reference_lengths(),
-  include_resid = FALSE
+  ref_df = vector_recovery_reference_lengths()
 ) {
-  # Keep only rows where the reference (true) target is zero.
-  zero_targets <- ref_df |>
-    dplyr::filter(target == 0)
-
-  # Optionally exclude residual from this median check.
-  if (!include_resid) {
-    zero_targets <- zero_targets |>
-      dplyr::filter(prediction != "resid")
-  }
-
-  # For each condition/prediction with true target 0:
-  # - compute the recovered median length
-  # - flag whether that median is exactly 0.
-  length_df |>
+  compare_df <- length_df |>
     dplyr::inner_join(
-      zero_targets[, c("condition", "prediction", "target"), drop = FALSE],
+      ref_df[, c("condition", "prediction", "target"), drop = FALSE],
       by = c("condition", "prediction")
     ) |>
+    dplyr::mutate(
+      error = length - target,
+      is_under = error < 0,
+      is_over = error > 0,
+      is_exact = error == 0
+    )
+
+  by_condition_prediction <- compare_df |>
     dplyr::group_by(condition, prediction, target) |>
     dplyr::summarise(
       n = dplyr::n(),
-      median_length = stats::median(length),
-      median_is_zero = (stats::median(length) == 0),
+      pct_under = 100 * mean(is_under),
+      pct_over = 100 * mean(is_over),
+      pct_exact = 100 * mean(is_exact),
+      median_error = stats::median(error),
       .groups = "drop"
     )
+
+  by_prediction <- compare_df |>
+    dplyr::group_by(prediction) |>
+    dplyr::summarise(
+      n = dplyr::n(),
+      pct_under = 100 * mean(is_under),
+      pct_over = 100 * mean(is_over),
+      pct_exact = 100 * mean(is_exact),
+      median_error = stats::median(error),
+      .groups = "drop"
+    )
+
+  positive_target_rows <- compare_df |>
+    dplyr::filter(target > 0)
+
+  positive_targets_overall <- positive_target_rows |>
+    dplyr::summarise(
+      n = dplyr::n(),
+      pct_under = 100 * mean(is_under),
+      pct_over = 100 * mean(is_over),
+      pct_exact = 100 * mean(is_exact),
+      median_error = stats::median(error)
+    )
+
+  positive_targets_by_prediction <- positive_target_rows |>
+    dplyr::group_by(prediction) |>
+    dplyr::summarise(
+      n = dplyr::n(),
+      pct_under = 100 * mean(is_under),
+      pct_over = 100 * mean(is_over),
+      pct_exact = 100 * mean(is_exact),
+      median_error = stats::median(error),
+      .groups = "drop"
+    )
+
+  most_overestimated_prediction <- by_prediction |>
+    dplyr::arrange(dplyr::desc(pct_over), dplyr::desc(median_error))
+
+  list(
+    by_condition_prediction = by_condition_prediction,
+    by_prediction = by_prediction,
+    positive_targets_overall = positive_targets_overall,
+    positive_targets_by_prediction = positive_targets_by_prediction,
+    most_overestimated_prediction = most_overestimated_prediction
+  )
 }
 
 # Main wrapper for Study 2 vector-length recovery.
@@ -1123,22 +1165,9 @@ run_s2_vector_recovery <- function(
     dot_size = dot_size,
     dot_jitter_height = dot_jitter_height
   )
-  # Summaries for vectors with true target length 0.
-  zero_recovery_summary <- summarize_zero_recovery(
-    length_df = est_df,
-    ref_df = ref_df,
-    include_resid = FALSE
-  )
-  zero_median_summary <- summarize_zero_target_medians(
-    length_df = est_df,
-    ref_df = ref_df,
-    include_resid = FALSE
-  )
 
   list(
     estimates = est_df,
-    zero_recovery_summary = zero_recovery_summary,
-    zero_median_summary = zero_median_summary,
     panel_plot = plot_bundle$panel_plot,
     condition_plots = plot_bundle$condition_plots
   )

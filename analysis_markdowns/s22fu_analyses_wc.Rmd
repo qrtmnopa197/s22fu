@@ -1460,14 +1460,6 @@ s2_vrec <- run_s2_vector_recovery(
   seed = 19
 )
 
-# Percentage of recovered lengths that are zero for vectors simulated with target length 0.
-s2_vrec$zero_recovery_summary$by_prediction
-s2_vrec$zero_recovery_summary$by_condition
-s2_vrec$zero_recovery_summary$overall
-
-# For each true-zero vector, check whether the recovered median is exactly zero.
-s2_vrec$zero_median_summary
-
 write.csv(s2_vrec$estimates,paste0(rec_dir,"s2_vector_recovery_",rec_tag,"_estimates.csv"),row.names=FALSE)
 
 ggsave(paste0(fig_dir,"s2_vector_recovery_",rec_tag,"_panel.pdf"),s2_vrec$panel_plot,width=5.5,height=3.8,device=cairo_pdf,bg="white")
@@ -1481,32 +1473,56 @@ ggsave(paste0(fig_dir,"s2_vector_recovery_",rec_tag,"_blend.pdf"),s2_vrec$condit
 s2_vrec$panel_plot
 ```
 
-Rebuild density plots from saved simulation outputs, without rerunning simulations.
+Get summary stats for the recovery
 ```{r}
-replot_dot <- build_vector_recovery_plots_from_file(
-  estimates_file = paste0(rec_dir, "s2_vector_recovery_",rec_tag,"_estimates.csv"),
-  plot_type = "dot"
-)
-
-replot_dot$panel_plot
-
-# Recreate exact-zero recovery summaries from saved simulation outputs.
 zero_recovery_summary <- summarize_zero_recovery(
-  length_df = read.csv(paste0(rec_dir, "s2_vector_recovery_",rec_tag,"_estimates.csv"), stringsAsFactors = FALSE),
+  length_df = s2_vrec$estimates,
   include_resid = FALSE
 )
 
+# Percentage of recovered lengths that are zero for vectors simulated with target length 0.
 zero_recovery_summary$by_prediction
 zero_recovery_summary$by_condition
 zero_recovery_summary$overall
 
-# Recreate median-at-zero checks for vectors with true target length 0.
-zero_median_summary <- summarize_zero_target_medians(
-  length_df = read.csv(paste0(rec_dir, "s2_vector_recovery_",rec_tag,"_estimates.csv"), stringsAsFactors = FALSE),
-  include_resid = FALSE
+# Directional recovery summaries (underestimated vs overestimated).
+over_under_summary <- summarize_over_under_recovery(
+  length_df = s2_vrec$estimates,
+  ref_df = vector_recovery_reference_lengths()
 )
+over_under_summary$positive_targets_overall
+over_under_summary$positive_targets_by_prediction
+over_under_summary$most_overestimated_prediction
+```
 
-zero_median_summary
+Rebuild density plots from saved simulation outputs, without rerunning simulations.
+```{r}
+# replot_dot <- build_vector_recovery_plots_from_file(
+#   estimates_file = paste0(rec_dir, "s2_vector_recovery_",rec_tag,"_estimates.csv"),
+#   plot_type = "dot"
+# )
+# 
+# replot_dot$panel_plot
+# 
+# # Recreate exact-zero recovery summaries from saved simulation outputs.
+# zero_recovery_summary <- summarize_zero_recovery(
+#   length_df = read.csv(paste0(rec_dir, "s2_vector_recovery_",rec_tag,"_estimates.csv"), stringsAsFactors = FALSE),
+#   include_resid = FALSE
+# )
+# 
+# zero_recovery_summary$by_prediction
+# zero_recovery_summary$by_condition
+# zero_recovery_summary$overall
+# 
+# # Recreate directional recovery summaries from saved simulation outputs.
+# over_under_summary <- summarize_over_under_recovery(
+#   length_df = read.csv(paste0(rec_dir, "s2_vector_recovery_",rec_tag,"_estimates.csv"), stringsAsFactors = FALSE),
+#   ref_df = vector_recovery_reference_lengths()
+# )
+# 
+# over_under_summary$positive_targets_overall
+# over_under_summary$positive_targets_by_prediction
+# over_under_summary$most_overestimated_prediction
 ```
 
 
